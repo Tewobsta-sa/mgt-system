@@ -21,26 +21,40 @@ class RegisteredUserController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-        'name' => ['required', 'string', 'max:255'],
-        'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-        'password' => ['required', 'string', 'min:8', 'confirmed'],
-        'role' => ['required', 'string', 'exists:roles,name'] // 👈 validate role
+        'name' => 'required|string|max:255',
+        'email' => 'required|email|unique:users',
+        'password' => 'required|string|min:8',
+        'role' => 'required|string',
     ]);
 
-    // Optional: restrict roles based on logged-in user's role, if needed
+    $currentRole = $request->user()->getRoleNames()->first();
+    $targetRole = $request->role;
+
+    $allowedRoles = $this->allowedToRegister($currentRole);
+
+    if (!in_array($targetRole, $allowedRoles)) {
+        return response()->json(['error' => 'You are not allowed to register this role'], 403);
+    }
 
     $user = User::create([
         'name' => $request->name,
         'email' => $request->email,
+        'role' => $targetRole,
         'password' => Hash::make($request->password),
     ]);
+    $user->assignRole($request->role);
 
-    $user->assignRole($request->role); 
-
-    return response()->json([
-        'message' => 'User registered successfully',
-        'user' => $user,
-        'roles' => $user->getRoleNames(),
-    ], 201);
-    }
+    return response()->json(['message' => 'User registered successfully'], 201);
+}
+    private function allowedToRegister($role)
+{
+    return match ($role) {
+        'mezmur_office_admin' => ['mezmur_trainer', 'wereb_trainer', 'mezmur_office_coordinator'],
+        'tmhrt_office_admin' => ['regular_teacher', 'tmhrt_office_coordinator'],
+        'distance_admin' => ['distance_teacher', 'distance_coordinator'],
+        'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
+        'super_admin' => ['mezmur_trainer', 'wereb_trainer', 'mezmur_office_coordinator', 'regular_teacher', 'tmhrt_office_coordinator', 'distance_teacher', 'distance_coordinator', 'gngnunet_office_coordinator', 'student', 'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin', 'gngnunet_office_admin', 'super_admin'],
+        default => []
+    };
+}
 }
