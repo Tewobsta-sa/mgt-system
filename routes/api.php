@@ -24,33 +24,33 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     
 
-Route::prefix('students')->middleware(['auth:sanctum'])->group(function () {
+    Route::prefix('students')->middleware(['auth:sanctum'])->group(function () {
 
-    Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin|gngnunet_office_coordinator'])->group(function () {
-        Route::get('regular', [StudentController::class, 'indexRegular']);
-        Route::post('regular', [StudentController::class, 'storeRegular']);
-        Route::get('regular/{id}', [StudentController::class, 'showRegular']);
-        Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
-        Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
+        Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin|gngnunet_office_coordinator'])->group(function () {
+            Route::get('regular', [StudentController::class, 'indexRegular']);
+            Route::post('regular', [StudentController::class, 'storeRegular']);
+            Route::get('regular/{id}', [StudentController::class, 'showRegular']);
+            Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
+            Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
+        });
+
+        Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
+            Route::get('young', [StudentController::class, 'indexYoung']);
+            Route::post('young', [StudentController::class, 'storeYoung']);
+            Route::get('young/{id}', [StudentController::class, 'showYoung']);
+            Route::put('young/{id}', [StudentController::class, 'updateYoung']);
+            Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
+        });
+
+        Route::middleware([RoleMiddleware::class . ':distance_coordinator|distance_admin'])->group(function () {
+            Route::get('distance', [StudentController::class, 'indexDistance']);
+            Route::post('distance', [StudentController::class, 'storeDistance']);
+            Route::get('distance/{id}', [StudentController::class, 'showDistance']);
+            Route::put('distance/{id}', [StudentController::class, 'updateDistance']);
+            Route::delete('distance/{id}', [StudentController::class, 'destroyDistance']);
+        });
+
     });
-
-    Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
-        Route::get('young', [StudentController::class, 'indexYoung']);
-        Route::post('young', [StudentController::class, 'storeYoung']);
-        Route::get('young/{id}', [StudentController::class, 'showYoung']);
-        Route::put('young/{id}', [StudentController::class, 'updateYoung']);
-        Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
-    });
-
-    Route::middleware([RoleMiddleware::class . ':distance_coordinator|distance_admin'])->group(function () {
-        Route::get('distance', [StudentController::class, 'indexDistance']);
-        Route::post('distance', [StudentController::class, 'storeDistance']);
-        Route::get('distance/{id}', [StudentController::class, 'showDistance']);
-        Route::put('distance/{id}', [StudentController::class, 'updateDistance']);
-        Route::delete('distance/{id}', [StudentController::class, 'destroyDistance']);
-    });
-
-});
 
 
     //section and program type
