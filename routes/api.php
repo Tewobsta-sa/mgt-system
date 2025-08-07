@@ -6,6 +6,11 @@ use App\Http\Controllers\ProgramTypeController;
 use App\Http\Controllers\SectionController;
 use Illuminate\Support\Facades\Route;
 use Spatie\Permission\Middleware\RoleMiddleware;
+use App\Http\Controllers\AssignmentController ;
+use App\Http\Controllers\ScheduleController;
+use App\Http\Controllers\AttendanceController;
+use App\Http\Controllers\MezmurController;
+use App\Http\Controllers\MinistryController;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
@@ -59,3 +64,32 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
 
 });
+
+
+
+Route::get('/assignments', [AssignmentController::class,'index']);
+Route::post('/assignments', [AssignmentController::class,'store']);
+Route::get('/assignments/{id}', [AssignmentController::class,'show']);
+Route::patch('/assignments/{id}/deactivate', [AssignmentController::class,'deactivate']);
+// (optional) Route::put('/assignments/{id}', ...)
+
+Route::get('/schedules', [ScheduleController::class,'index']);
+Route::post('/schedules', [ScheduleController::class,'store']);
+Route::get('/schedules/{id}', [ScheduleController::class,'show']);
+Route::delete('/schedules/{id}', [ScheduleController::class,'destroy']);
+
+Route::get('/attendance/block/{blockId}', [AttendanceController::class,'indexByBlock']);
+Route::post('/attendance/bulk', [AttendanceController::class,'bulkUpsert']);
+
+Route::get('/mezmurs', [MezmurController::class,'index']);
+Route::post('/mezmurs', [MezmurController::class,'store']);
+Route::get('/mezmurs/{id}', [MezmurController::class,'show']);
+Route::put('/mezmurs/{id}', [MezmurController::class,'update']);
+Route::delete('/mezmurs/{id}', [MezmurController::class,'destroy']);
+
+Route::get('/ministries', [MinistryController::class,'index']);
+Route::post('/ministries', [MinistryController::class,'store']);
+Route::post('/ministries/assignments', [MinistryController::class,'addAssignment']);
+Route::post('/ministries/assignments/{id}/auto-select', [MinistryController::class,'autoSelectStudents']);
+Route::post('/ministries/assignments/{id}/students', [MinistryController::class,'addStudentManually']);
+Route::delete('/ministries/assignments/{id}/students/{studentId}', [MinistryController::class,'removeStudent']);
