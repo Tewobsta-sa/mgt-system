@@ -14,7 +14,6 @@ return new class extends Migration
         Schema::create('mezmurs', function (Blueprint $t) {
             $t->id();
             $t->string('title');
-            $t->longText('lyrics')->nullable();
             $t->string('audio_url')->nullable();
             $t->foreignId('category_id')->constrained('mezmur_categories');
             $t->timestamps();

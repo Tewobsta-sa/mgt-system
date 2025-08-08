@@ -13,6 +13,7 @@ use App\Http\Controllers\MezmurController;
 use App\Http\Controllers\MinistryController;
 use App\Http\Controllers\TrainerController;
 use App\Http\Controllers\MezmurCategoryTypeController;
+use App\Http\Controllers\MezmurCategoryController;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
@@ -67,6 +68,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|mezmur_office_coordinator'])->group(function () {
         Route::apiResource('trainers', TrainerController::class);
         Route::apiResource('mezmur-category-types', MezmurCategoryTypeController::class);
+        Route::apiResource('mezmur-categories', MezmurCategoryController::class);
+        Route::apiResource('mezmurs', MezmurController::class);
+
     });
 });
 
@@ -85,12 +89,6 @@ Route::delete('/schedules/{id}', [ScheduleController::class,'destroy']);
 
 Route::get('/attendance/block/{blockId}', [AttendanceController::class,'indexByBlock']);
 Route::post('/attendance/bulk', [AttendanceController::class,'bulkUpsert']);
-
-Route::get('/mezmurs', [MezmurController::class,'index']);
-Route::post('/mezmurs', [MezmurController::class,'store']);
-Route::get('/mezmurs/{id}', [MezmurController::class,'show']);
-Route::put('/mezmurs/{id}', [MezmurController::class,'update']);
-Route::delete('/mezmurs/{id}', [MezmurController::class,'destroy']);
 
 Route::get('/ministries', [MinistryController::class,'index']);
 Route::post('/ministries', [MinistryController::class,'store']);
