@@ -77,10 +77,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('assignments', AssignmentController::class);
     Route::get('schedule', [AssignmentController::class, 'schedule']);
     Route::apiResource('courses', CourseController::class);
-});
+    Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
+    Route::get('attendance', [AttendanceController::class, 'getAttendance']);
 
-Route::get('/attendance/block/{blockId}', [AttendanceController::class,'indexByBlock']);
-Route::post('/attendance/bulk', [AttendanceController::class,'bulkUpsert']);
+});
 
 Route::get('/ministries', [MinistryController::class,'index']);
 Route::post('/ministries', [MinistryController::class,'store']);

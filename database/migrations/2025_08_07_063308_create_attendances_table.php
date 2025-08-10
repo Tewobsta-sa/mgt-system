@@ -1,5 +1,4 @@
-<?php
-
+<?php 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -11,15 +10,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('attendance', function (Blueprint $t) {
-            $t->id();
-            $t->foreignId('schedule_block_id')->constrained('schedule_blocks')->cascadeOnDelete();
-            $t->foreignId('student_id')->constrained('students')->cascadeOnDelete();
-            $t->enum('status', ['Present','Absent','Late']);
-            $t->foreignId('marked_by_user_id')->constrained('users');
-            $t->timestamp('marked_at')->useCurrent();
-            $t->timestamps();
-            $t->unique(['schedule_block_id','student_id']);
+        Schema::create('attendances', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('assignment_id')->constrained('assignments')->cascadeOnDelete();
+            $table->foreignId('student_id')->constrained('students')->cascadeOnDelete();
+            $table->enum('status', ['Present', 'Absent', 'Excused']);
+            $table->foreignId('marked_by_user_id')->constrained('users');
+            $table->timestamp('marked_at')->useCurrent();
+            $table->timestamps();
+            $table->unique(['assignment_id', 'student_id']);
         });
     }
 

@@ -2,55 +2,119 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Attendance;
+use App\Models\Assignment;
+use App\Models\Student;
 use Illuminate\Http\Request;
-
-namespace App\Http\Controllers;
-
-use App\Http\Requests\BulkAttendanceRequest;
-use App\Models\{Attendance, ScheduleBlock, Assignment, Student, MezmurStudent};
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 
 class AttendanceController extends Controller
 {
-    public function indexByBlock($blockId)
+    public function markAttendance(Request $request)
     {
-        return Attendance::with('student')->where('schedule_block_id',$blockId)->get();
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $validated = $request->validate([
+            'assignment_id' => 'required|exists:assignments,id',
+            'student_id' => 'required|exists:students,id',
+            'status' => 'required|in:Present,Absent,Excused',
+        ]);
+
+        $assignment = Assignment::with('section')->findOrFail($validated['assignment_id']);
+        $student = Student::findOrFail($validated['student_id']);
+
+        if ($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator')) {
+            if ($assignment->type !== 'MezmurTraining') {
+                return response()->json(['message' => 'Forbidden: You can only mark attendance for MezmurTraining assignments.'], 403);
+            }
+        } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_office_coordinator')) {
+            if ($assignment->type !== 'Course') {
+                return response()->json(['message' => 'Forbidden: You can only mark attendance for Course assignments.'], 403);
+            }
+        } else {
+            return response()->json(['message' => 'Forbidden: Your role cannot mark attendance.'], 403);
+        }
+
+        if (!$assignment->section) {
+            return response()->json(['message' => 'Assignment does not have a valid section for program type check.'], 422);
+        }
+
+        if ($assignment->section->program_type_id !== $student->program_type_id) {
+            return response()->json([
+                'message' => 'Program type mismatch: Student and Assignment section program types do not match.'
+            ], 422);
+        }
+
+        $attendance = Attendance::updateOrCreate(
+            [
+                'assignment_id' => $validated['assignment_id'],
+                'student_id' => $validated['student_id'],
+            ],
+            [
+                'status' => $validated['status'],
+                'marked_by_user_id' => $user->id,
+                'marked_at' => now(),
+            ]
+        );
+
+        return response()->json(['message' => 'Attendance recorded', 'attendance' => $attendance], 200);
     }
 
-    public function bulkUpsert(BulkAttendanceRequest $request)
+    public function getAttendance(Request $request)
     {
-        $data = $request->validated();
-        $block = ScheduleBlock::with('assignment.section')->findOrFail($data['schedule_block_id']);
-
-        // Determine eligible roster for this block
-        $eligibleQuery = Student::query();
-
-        if ($block->assignment->type === 'Course') {
-            // Students of the section
-            $eligibleQuery->where('section_id', $block->assignment->section_id);
-        } else { // MezmurTraining
-            $mezIds = MezmurStudent::where('active', true)->pluck('student_id');
-            $eligibleQuery->whereIn('id', $mezIds);
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
         }
-        $eligible = $eligibleQuery->pluck('id')->toArray();
 
-        $userId = Auth::id();
+        $query = Attendance::with(['student', 'assignment', 'markedBy']);
 
-        DB::transaction(function() use ($data,$eligible,$userId) {
-            foreach ($data['rows'] as $r) {
-                if (!in_array($r['student_id'], $eligible)) {
-                    // skip or throw
-                    continue;
-                }
-                Attendance::updateOrCreate(
-                    ['schedule_block_id' => $data['schedule_block_id'], 'student_id' => $r['student_id']],
-                    ['status' => $r['status'], 'marked_by_user_id' => $userId, 'marked_at' => now()]
-                );
+        if ($user->hasRole('gngunet_office_admin') || $user->hasRole('gngunet_office_coordinator')) {
+        } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_office_coordinator')) {
+            $query->whereHas('assignment', function ($q) {
+                $q->where('type', 'Course');
+            });
+        } elseif ($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator')) {
+            $query->whereHas('assignment', function ($q) {
+                $q->where('type', 'MezmurTraining');
+            });
+        } else {
+            return response()->json(['message' => 'Forbidden: Your role cannot view attendance.'], 403);
+        }
+
+        if ($assignmentId = $request->input('assignment_id')) {
+            $query->where('assignment_id', $assignmentId);
+        }
+
+        if ($studentId = $request->input('student_id')) {
+            $query->where('student_id', $studentId);
+        }
+
+        if ($status = $request->input('status')) {
+            $allowedStatuses = ['Present', 'Absent', 'Excused'];
+            if (in_array($status, $allowedStatuses)) {
+                $query->where('status', $status);
             }
-        });
+        }
 
-        return response()->json(['message'=>'Attendance saved']);
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+
+        if ($startDate && $endDate) {
+            $query->whereBetween('marked_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+        } elseif ($startDate) {
+            $query->where('marked_at', '>=', $startDate . ' 00:00:00');
+        } elseif ($endDate) {
+            $query->where('marked_at', '<=', $endDate . ' 23:59:59');
+        }
+
+        $perPage = $request->input('per_page', 20);
+
+        $attendanceRecords = $query->orderBy('marked_at', 'desc')->paginate($perPage);
+
+        return response()->json($attendanceRecords);
     }
 }
-
