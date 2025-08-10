@@ -7,6 +7,8 @@ use App\Models\AssignmentMezmur;
 use App\Models\User;
 use App\Models\Section;
 use App\Models\Course;
+use App\Models\Trainer;
+use App\Models\Mezmur;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +16,6 @@ use Carbon\Carbon;
 
 class AssignmentController extends Controller
 {
-    // Helper to check schedule conflicts
     protected function hasScheduleConflict($type, $dayOfWeek, $startTime, $endTime, $userOrTrainerId, $excludeAssignmentId = null, $scheduledDate = null)
     {
         $query = Assignment::where('type', $type)
@@ -40,7 +41,6 @@ class AssignmentController extends Controller
         return $query->exists();
     }
 
-    // List assignments (filtered by user role)
     public function index(Request $request)
     {
         $user = Auth::user();
@@ -88,7 +88,6 @@ class AssignmentController extends Controller
         return response()->json($results);
     }
 
-    // Show single assignment
     public function show(Assignment $assignment)
     {
         $user = Auth::user();
@@ -116,7 +115,6 @@ class AssignmentController extends Controller
         return response()->json($assignment);
     }
 
-    // Store new assignment
     public function store(Request $request)
     {
         $user = Auth::user();
@@ -125,13 +123,11 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        // Validate presence of either day_of_week or scheduled_date
         if (!$request->filled('day_of_week') && !$request->filled('scheduled_date')) {
             return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
         }
 
         if ($user->hasRole('tmhrt_office_admin')) {
-            // Validate Course assignment input
             $rules = [
                 'section' => 'required|string',
                 'user_id' => 'required|exists:users,id',
@@ -145,13 +141,11 @@ class AssignmentController extends Controller
             ];
             $validated = $request->validate($rules);
 
-            // Check user role
             $assignedUser = User::find($validated['user_id']);
             if (!$assignedUser || !$assignedUser->hasRole('teacher')) {
                 return response()->json(['message' => 'Assigned user must have the teacher role'], 422);
             }
 
-            // Check section and course exist
             $section = Section::where('name', $validated['section'])->first();
             if (!$section) {
                 return response()->json(['message' => 'Section not found'], 422);
@@ -161,12 +155,10 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
-            // Check program type match
             if ($section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
             }
 
-            // Check schedule conflict
             if ($this->hasScheduleConflict(
                 'Course', 
                 $validated['day_of_week'] ?? null, 
@@ -179,7 +171,6 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Schedule conflict: Teacher has another assignment at this time'], 422);
             }
 
-            // Create assignment and related assignment_course
             DB::beginTransaction();
             try {
                 $assignment = Assignment::create([
@@ -219,7 +210,6 @@ class AssignmentController extends Controller
             }
         } 
         elseif ($user->hasRole('mezmur_office_admin')) {
-            // Validate MezmurTraining assignment input
             $rules = [
                 'trainer_id' => 'required|exists:trainers,id',
                 'mezmur_ids' => 'required|array|min:1',
@@ -232,7 +222,21 @@ class AssignmentController extends Controller
             ];
             $validated = $request->validate($rules);
 
-            // Check schedule conflict for trainer
+            $trainer = Trainer::find($validated['trainer_id']);
+            if (!$trainer) {
+                return response()->json(['message' => 'Trainer not found'], 422);
+            }
+
+            $mezmurs = Mezmur::whereIn('id', $validated['mezmur_ids'])->get();
+
+            foreach ($mezmurs as $mezmur) {
+                if (!in_array($mezmur->category_type, $trainer->specialties ?? [])) {
+                    return response()->json([
+                        'message' => "Trainer specialty mismatch: Trainer does not have the required specialty '{$mezmur->category_type}' for mezmur '{$mezmur->title}'."
+                    ], 422);
+                }
+            }
+
             if ($this->hasScheduleConflict(
                 'MezmurTraining', 
                 $validated['day_of_week'] ?? null, 
@@ -287,7 +291,6 @@ class AssignmentController extends Controller
         }
     }
 
-    // Update assignment
     public function update(Request $request, Assignment $assignment)
     {
         $user = Auth::user();
@@ -303,7 +306,6 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        // Validate presence of either day_of_week or scheduled_date
         if (!$request->filled('day_of_week') && !$request->filled('scheduled_date')) {
             return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
         }
@@ -342,7 +344,6 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
             }
 
-            // Check schedule conflict excluding current assignment
             if ($this->hasScheduleConflict(
                 'Course', 
                 $data['day_of_week'] ?? null, 
@@ -385,7 +386,6 @@ class AssignmentController extends Controller
             });
 
         } else {
-            // MezmurTraining update
             $rules = [
                 'trainer_id' => 'required|exists:trainers,id',
                 'mezmur_ids' => 'required|array|min:1',
@@ -399,6 +399,21 @@ class AssignmentController extends Controller
             ];
 
             $data = $request->validate($rules);
+
+            $trainer = Trainer::find($data['trainer_id']);
+            if (!$trainer) {
+                return response()->json(['message' => 'Trainer not found'], 422);
+            }
+
+            $mezmurs = Mezmur::whereIn('id', $data['mezmur_ids'])->get();
+
+            foreach ($mezmurs as $mezmur) {
+                if (!in_array($mezmur->category_type, $trainer->specialties ?? [])) {
+                    return response()->json([
+                        'message' => "Trainer specialty mismatch: Trainer does not have the required specialty '{$mezmur->category_type}' for mezmur '{$mezmur->title}'."
+                    ], 422);
+                }
+            }
 
             if ($this->hasScheduleConflict(
                 'MezmurTraining', 
@@ -423,7 +438,6 @@ class AssignmentController extends Controller
                     'active' => $data['active'] ?? $assignment->active,
                 ]);
 
-                // Sync mezmurs
                 $assignment->mezmurs()->sync($data['mezmur_ids']);
             });
         }
@@ -440,7 +454,6 @@ class AssignmentController extends Controller
         return response()->json($assignment);
     }
 
-    // Delete assignment
     public function destroy(Assignment $assignment)
     {
         $user = Auth::user();
@@ -460,8 +473,6 @@ class AssignmentController extends Controller
         return response()->json(['message' => 'Assignment deleted successfully']);
     }
 
-    // Public schedule view (all assignments per day or date)
-
     public function schedule(Request $request)
     {
         $user = Auth::user();
@@ -472,7 +483,6 @@ class AssignmentController extends Controller
 
         $dayOfWeek = $request->input('day_of_week');
 
-        // First, deactivate past scheduled_date assignments:
         $now = Carbon::now()->startOfDay();
 
         Assignment::whereNotNull('scheduled_date')
@@ -497,6 +507,4 @@ class AssignmentController extends Controller
 
         return response()->json($schedule);
     }
-
-
 }
