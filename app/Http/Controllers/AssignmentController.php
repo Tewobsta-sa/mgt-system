@@ -10,16 +10,22 @@ use App\Models\Course;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class AssignmentController extends Controller
 {
     // Helper to check schedule conflicts
-    protected function hasScheduleConflict($type, $dayOfWeek, $startTime, $endTime, $userOrTrainerId, $excludeAssignmentId = null)
+    protected function hasScheduleConflict($type, $dayOfWeek, $startTime, $endTime, $userOrTrainerId, $excludeAssignmentId = null, $scheduledDate = null)
     {
-        $query = Assignment::where('day_of_week', $dayOfWeek)
-                    ->where('type', $type)
+        $query = Assignment::where('type', $type)
                     ->where('start_time', '<', $endTime)
                     ->where('end_time', '>', $startTime);
+
+        if ($scheduledDate) {
+            $query->where('scheduled_date', $scheduledDate);
+        } else {
+            $query->where('day_of_week', $dayOfWeek);
+        }
 
         if ($type === 'Course') {
             $query->where('user_id', $userOrTrainerId);
@@ -119,6 +125,11 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
+        // Validate presence of either day_of_week or scheduled_date
+        if (!$request->filled('day_of_week') && !$request->filled('scheduled_date')) {
+            return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
+        }
+
         if ($user->hasRole('tmhrt_office_admin')) {
             // Validate Course assignment input
             $rules = [
@@ -127,7 +138,8 @@ class AssignmentController extends Controller
                 'course' => 'required|string',
                 'default_period_order' => 'nullable|integer',
                 'location' => 'nullable|string',
-                'day_of_week' => 'required|integer|min:0|max:6',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'scheduled_date' => 'nullable|date',
                 'start_time' => 'required|date_format:H:i',
                 'end_time' => 'required|date_format:H:i|after:start_time',
             ];
@@ -155,7 +167,15 @@ class AssignmentController extends Controller
             }
 
             // Check schedule conflict
-            if ($this->hasScheduleConflict('Course', $validated['day_of_week'], $validated['start_time'], $validated['end_time'], $validated['user_id'])) {
+            if ($this->hasScheduleConflict(
+                'Course', 
+                $validated['day_of_week'] ?? null, 
+                $validated['start_time'], 
+                $validated['end_time'], 
+                $validated['user_id'], 
+                null, 
+                $validated['scheduled_date'] ?? null
+            )) {
                 return response()->json(['message' => 'Schedule conflict: Teacher has another assignment at this time'], 422);
             }
 
@@ -167,7 +187,8 @@ class AssignmentController extends Controller
                     'section_id' => $section->id,
                     'user_id' => $validated['user_id'],
                     'location' => $validated['location'] ?? null,
-                    'day_of_week' => $validated['day_of_week'],
+                    'day_of_week' => $validated['day_of_week'] ?? null,
+                    'scheduled_date' => $validated['scheduled_date'] ?? null,
                     'start_time' => $validated['start_time'],
                     'end_time' => $validated['end_time'],
                     'active' => true,
@@ -204,14 +225,23 @@ class AssignmentController extends Controller
                 'mezmur_ids' => 'required|array|min:1',
                 'mezmur_ids.*' => 'exists:mezmurs,id',
                 'location' => 'nullable|string',
-                'day_of_week' => 'required|integer|min:0|max:6',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'scheduled_date' => 'nullable|date',
                 'start_time' => 'required|date_format:H:i',
                 'end_time' => 'required|date_format:H:i|after:start_time',
             ];
             $validated = $request->validate($rules);
 
             // Check schedule conflict for trainer
-            if ($this->hasScheduleConflict('MezmurTraining', $validated['day_of_week'], $validated['start_time'], $validated['end_time'], $validated['trainer_id'])) {
+            if ($this->hasScheduleConflict(
+                'MezmurTraining', 
+                $validated['day_of_week'] ?? null, 
+                $validated['start_time'], 
+                $validated['end_time'], 
+                $validated['trainer_id'], 
+                null, 
+                $validated['scheduled_date'] ?? null
+            )) {
                 return response()->json(['message' => 'Schedule conflict: Trainer has another assignment at this time'], 422);
             }
 
@@ -221,7 +251,8 @@ class AssignmentController extends Controller
                     'type' => 'MezmurTraining',
                     'trainer_id' => $validated['trainer_id'],
                     'location' => $validated['location'] ?? null,
-                    'day_of_week' => $validated['day_of_week'],
+                    'day_of_week' => $validated['day_of_week'] ?? null,
+                    'scheduled_date' => $validated['scheduled_date'] ?? null,
                     'start_time' => $validated['start_time'],
                     'end_time' => $validated['end_time'],
                     'active' => true,
@@ -272,6 +303,11 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
+        // Validate presence of either day_of_week or scheduled_date
+        if (!$request->filled('day_of_week') && !$request->filled('scheduled_date')) {
+            return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
+        }
+
         if ($assignment->type === 'Course') {
             $rules = [
                 'section' => 'sometimes|required|string',
@@ -279,7 +315,8 @@ class AssignmentController extends Controller
                 'course' => 'required|string',
                 'default_period_order' => 'nullable|integer',
                 'location' => 'nullable|string',
-                'day_of_week' => 'required|integer|min:0|max:6',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'scheduled_date' => 'nullable|date',
                 'start_time' => 'required|date_format:H:i',
                 'end_time' => 'required|date_format:H:i|after:start_time',
                 'active' => 'nullable|boolean',
@@ -306,7 +343,15 @@ class AssignmentController extends Controller
             }
 
             // Check schedule conflict excluding current assignment
-            if ($this->hasScheduleConflict('Course', $data['day_of_week'], $data['start_time'], $data['end_time'], $data['user_id'], $assignment->id)) {
+            if ($this->hasScheduleConflict(
+                'Course', 
+                $data['day_of_week'] ?? null, 
+                $data['start_time'], 
+                $data['end_time'], 
+                $data['user_id'], 
+                $assignment->id, 
+                $data['scheduled_date'] ?? null
+            )) {
                 return response()->json(['message' => 'Schedule conflict: Teacher has another assignment at this time'], 422);
             }
 
@@ -315,7 +360,8 @@ class AssignmentController extends Controller
                     'section_id' => $section->id,
                     'user_id' => $data['user_id'],
                     'location' => $data['location'] ?? $assignment->location,
-                    'day_of_week' => $data['day_of_week'],
+                    'day_of_week' => $data['day_of_week'] ?? null,
+                    'scheduled_date' => $data['scheduled_date'] ?? null,
                     'start_time' => $data['start_time'],
                     'end_time' => $data['end_time'],
                     'active' => $data['active'] ?? $assignment->active,
@@ -345,7 +391,8 @@ class AssignmentController extends Controller
                 'mezmur_ids' => 'required|array|min:1',
                 'mezmur_ids.*' => 'exists:mezmurs,id',
                 'location' => 'nullable|string',
-                'day_of_week' => 'required|integer|min:0|max:6',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'scheduled_date' => 'nullable|date',
                 'start_time' => 'required|date_format:H:i',
                 'end_time' => 'required|date_format:H:i|after:start_time',
                 'active' => 'nullable|boolean',
@@ -353,7 +400,15 @@ class AssignmentController extends Controller
 
             $data = $request->validate($rules);
 
-            if ($this->hasScheduleConflict('MezmurTraining', $data['day_of_week'], $data['start_time'], $data['end_time'], $data['trainer_id'], $assignment->id)) {
+            if ($this->hasScheduleConflict(
+                'MezmurTraining', 
+                $data['day_of_week'] ?? null, 
+                $data['start_time'], 
+                $data['end_time'], 
+                $data['trainer_id'], 
+                $assignment->id, 
+                $data['scheduled_date'] ?? null
+            )) {
                 return response()->json(['message' => 'Schedule conflict: Trainer has another assignment at this time'], 422);
             }
 
@@ -361,13 +416,14 @@ class AssignmentController extends Controller
                 $assignment->update([
                     'trainer_id' => $data['trainer_id'],
                     'location' => $data['location'] ?? $assignment->location,
-                    'day_of_week' => $data['day_of_week'],
+                    'day_of_week' => $data['day_of_week'] ?? null,
+                    'scheduled_date' => $data['scheduled_date'] ?? null,
                     'start_time' => $data['start_time'],
                     'end_time' => $data['end_time'],
                     'active' => $data['active'] ?? $assignment->active,
                 ]);
 
-                // Delete old mezmurs and add new ones
+                // Sync mezmurs
                 $assignment->mezmurs()->sync($data['mezmur_ids']);
             });
         }
@@ -404,7 +460,8 @@ class AssignmentController extends Controller
         return response()->json(['message' => 'Assignment deleted successfully']);
     }
 
-    // Public schedule view (all assignments per day)
+    // Public schedule view (all assignments per day or date)
+
     public function schedule(Request $request)
     {
         $user = Auth::user();
@@ -414,6 +471,14 @@ class AssignmentController extends Controller
         }
 
         $dayOfWeek = $request->input('day_of_week');
+
+        // First, deactivate past scheduled_date assignments:
+        $now = Carbon::now()->startOfDay();
+
+        Assignment::whereNotNull('scheduled_date')
+            ->where('scheduled_date', '<', $now)
+            ->where('active', true)
+            ->update(['active' => false]);
 
         $query = Assignment::with([
             'section',
@@ -428,10 +493,10 @@ class AssignmentController extends Controller
             $query->where('day_of_week', $dayOfWeek);
         }
 
-        
-
         $schedule = $query->orderBy('day_of_week')->orderBy('start_time')->get();
 
         return response()->json($schedule);
     }
+
+
 }

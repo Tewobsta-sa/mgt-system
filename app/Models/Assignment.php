@@ -10,7 +10,7 @@ class Assignment extends Model
 {
     protected $fillable = [
         'type', 'section_id', 'trainer_id', 'user_id',
-        'location', 'day_of_week', 'start_time', 'end_time', 'active'
+        'location', 'day_of_week','scheduled_date', 'start_time', 'end_time', 'active'
     ];
 
     public function section()
