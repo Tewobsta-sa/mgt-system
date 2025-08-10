@@ -2,46 +2,369 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\StoreAssignmentRequest;
 use App\Models\Assignment;
-use App\Services\AssignmentService;
+use App\Models\AssignmentCourse;
+use App\Models\AssignmentMezmur;
+use App\Models\User;
+use App\Models\Section;
+use App\Models\Course;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class AssignmentController extends Controller
 {
-    public function index()
-    {
-        return Assignment::with(['section.programType','user','mezmurs.category.type','courses.course','courses.teacher'])
-            ->orderByDesc('id')->paginate(10);
+    public function index(Request $request)
+{
+    $user = Auth::user();
+
+    if (!$user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
     }
 
-    public function store(StoreAssignmentRequest $request, AssignmentService $service)
-    {
-        $assignment = $service->create($request->validated());
-        return response()->json($assignment, 201);
+    $query = Assignment::query()->with([
+        'section',
+        'trainer',
+        'teacher',
+        'mezmurs',
+        'assignmentCourses.course',
+        'assignmentCourses.teacher'
+    ]);
+
+    // Role-based filtering: only show assignments relevant to the user role
+    if ($user->hasRole('tmhrt_office_admin')) {
+        $query->where('type', 'Course');
+    } elseif ($user->hasRole('mezmur_office_admin')) {
+        $query->where('type', 'MezmurTraining');
+    } else {
+        return response()->json(['message' => 'Forbidden'], 403);
     }
 
-    public function show($id)
-    {
-        $a = Assignment::with(['section.programType','user','mezmurs.category.type','courses.course','courses.teacher'])->findOrFail($id);
-        return $a;
+    // Optional search query
+    if ($search = $request->input('q')) {
+        $query->where(function ($qwhere) use ($search) {
+            $qwhere->where('id', $search)
+                ->orWhere('location', 'like', "%{$search}%")
+                ->orWhereHas('trainer', fn($t) => $t->where('name', 'like', "%{$search}%"))
+                ->orWhereHas('teacher', fn($u) => $u->where('name', 'like', "%{$search}%"))
+                ->orWhereHas('assignmentCourses.course', fn($c) => $c->where('title', 'like', "%{$search}%"))
+                ->orWhereHas('mezmurs', fn($m) => $m->where('title', 'like', "%{$search}%"));
+        });
     }
 
-    public function update(StoreAssignmentRequest $request, $id, AssignmentService $service)
-    {
-        // For brevity, reuse create() logic by deleting/overwriting relations,
-        // or implement an explicit update method in the service.
-        $existing = Assignment::findOrFail($id);
-        $existing->delete(); // or set inactive, then recreate
-        $assignment = $service->create($request->validated());
-        return $assignment;
-    }
+    // Sorting and pagination
+    $sortBy = $request->input('sort_by', 'created_at');
+    $sortDir = $request->input('sort_dir', 'desc');
+    $perPage = (int) $request->input('per_page', 15);
 
-    public function deactivate($id)
-    {
-        $a = Assignment::findOrFail($id);
-        $a->active = false;
-        $a->save();
-        return response()->json(['message'=>'Assignment deactivated']);
-    }
+    $results = $query->orderBy($sortBy, $sortDir)
+                     ->paginate($perPage)
+                     ->withQueryString();
+
+    return response()->json($results);
 }
 
+public function show(Assignment $assignment)
+{
+    $user = Auth::user();
+
+    if (!$user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    // Role-based authorization to view
+    if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+        return response()->json(['message' => 'Forbidden'], 403);
+    }
+    if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        return response()->json(['message' => 'Forbidden'], 403);
+    }
+
+    $assignment->load([
+        'section',
+        'trainer',
+        'teacher',
+        'mezmurs',
+        'assignmentCourses.course',
+        'assignmentCourses.teacher'
+    ]);
+
+    return response()->json($assignment);
+}
+
+
+    public function store(Request $request)
+    {
+        $user = Auth::user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        if ($user->hasRole('tmhrt_office_admin')) {
+            // Course assignment
+            $rules = [
+                'section' => 'required|string', // name of section
+                'user_id' => 'required|exists:users,id',
+                'course' => 'required|string', // name of course
+                'default_period_order' => 'nullable|integer',
+                'location' => 'nullable|string',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'start_time' => 'nullable|date_format:H:i',
+                'end_time' => 'nullable|date_format:H:i',
+            ];
+            $validated = $request->validate($rules);
+
+            // Validate that assigned user has role 'teacher'
+            $assignedUser = User::find($validated['user_id']);
+            if (!$assignedUser || !$assignedUser->hasRole('teacher')) {
+                return response()->json(['message' => 'Assigned user must have the teacher role'], 422);
+            }
+
+            // Lookup section and course by name
+            $section = Section::where('name', $validated['section'])->first();
+            if (!$section) {
+                return response()->json(['message' => 'Section not found by name'], 422);
+            }
+            $course = Course::where('name', $validated['course'])->first();
+            if (!$course) {
+                return response()->json(['message' => 'Course not found by name'], 422);
+            }
+
+            DB::beginTransaction();
+            try {
+                $assignment = Assignment::create([
+                    'type' => 'Course',
+                    'section_id' => $section->id,
+                    'user_id' => $validated['user_id'],
+                    'location' => $validated['location'] ?? null,
+                    'day_of_week' => $validated['day_of_week'] ?? null,
+                    'start_time' => $validated['start_time'] ?? null,
+                    'end_time' => $validated['end_time'] ?? null,
+                    'active' => true,
+                ]);
+
+                AssignmentCourse::create([
+                    'assignment_id' => $assignment->id,
+                    'course_id' => $course->id,
+                    'teacher_id' => $validated['user_id'],
+                    'default_period_order' => $validated['default_period_order'] ?? null,
+                ]);
+
+                DB::commit();
+
+                $assignment->load([
+                    'section',
+                    'trainer',
+                    'teacher',
+                    'mezmurs',
+                    'assignmentCourses.course',
+                    'assignmentCourses.teacher'
+                ]);
+
+                return response()->json($assignment, 201);
+            } catch (\Throwable $e) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'Could not create assignment',
+                    'error' => $e->getMessage()
+                ], 500);
+            }
+
+        } elseif ($user->hasRole('mezmur_office_admin')) {
+            // MezmurTraining assignment (no section)
+            $rules = [
+                'trainer_id' => 'required|exists:trainers,id',
+                'mezmur_ids' => 'required|array|min:1',
+                'mezmur_ids.*' => 'exists:mezmurs,id',
+                'location' => 'nullable|string',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'start_time' => 'nullable|date_format:H:i',
+                'end_time' => 'nullable|date_format:H:i',
+            ];
+
+            $validated = $request->validate($rules);
+
+            DB::beginTransaction();
+            try {
+                $assignment = Assignment::create([
+                    'type' => 'MezmurTraining',
+                    'trainer_id' => $validated['trainer_id'],
+                    'location' => $validated['location'] ?? null,
+                    'day_of_week' => $validated['day_of_week'] ?? null,
+                    'start_time' => $validated['start_time'] ?? null,
+                    'end_time' => $validated['end_time'] ?? null,
+                    'active' => true,
+                ]);
+
+                foreach ($validated['mezmur_ids'] as $mid) {
+                    AssignmentMezmur::create([
+                        'assignment_id' => $assignment->id,
+                        'mezmur_id' => $mid,
+                    ]);
+                }
+
+                DB::commit();
+
+                $assignment->load([
+                    'section',
+                    'trainer',
+                    'teacher',
+                    'mezmurs',
+                    'assignmentCourses.course',
+                    'assignmentCourses.teacher'
+                ]);
+
+                return response()->json($assignment, 201);
+            } catch (\Throwable $e) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'Could not create assignment',
+                    'error' => $e->getMessage()
+                ], 500);
+            }
+
+        } else {
+            return response()->json(['message' => 'Your role cannot create assignments'], 403);
+        }
+    }
+
+
+    public function update(Request $request, Assignment $assignment)
+    {
+        $user = Auth::user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        // Role-based CRUD permission enforcement
+        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if ($assignment->type === 'Course') {
+            $rules = [
+                'section' => 'sometimes|required|string',
+                'user_id' => 'required|exists:users,id',
+                'course' => 'required|string',
+                'default_period_order' => 'nullable|integer',
+                'location' => 'nullable|string',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'start_time' => 'nullable|date_format:H:i',
+                'end_time' => 'nullable|date_format:H:i',
+                'active' => 'nullable|boolean',
+            ];
+
+            $data = $request->validate($rules);
+
+            // Validate teacher role
+            $assignedUser = User::find($data['user_id']);
+            if (!$assignedUser || !$assignedUser->hasRole('teacher')) {
+                return response()->json(['message' => 'Assigned user must have the teacher role'], 422);
+            }
+
+            // Lookup section and course by name
+            $section = Section::where('name', $data['section'])->first();
+            if (!$section) {
+                return response()->json(['message' => 'Section not found by name'], 422);
+            }
+            $course = Course::where('name', $data['course'])->first();
+            if (!$course) {
+                return response()->json(['message' => 'Course not found by name'], 422);
+            }
+
+            DB::transaction(function () use ($assignment, $data, $section, $course) {
+                $assignment->update([
+                    'section_id' => $section->id,
+                    'user_id' => $data['user_id'],
+                    'location' => $data['location'] ?? $assignment->location,
+                    'day_of_week' => $data['day_of_week'] ?? $assignment->day_of_week,
+                    'start_time' => $data['start_time'] ?? $assignment->start_time,
+                    'end_time' => $data['end_time'] ?? $assignment->end_time,
+                    'active' => $data['active'] ?? $assignment->active,
+                ]);
+
+                $ac = $assignment->assignmentCourses()->first();
+                if ($ac) {
+                    $ac->update([
+                        'course_id' => $course->id,
+                        'teacher_id' => $data['user_id'],
+                        'default_period_order' => $data['default_period_order'] ?? $ac->default_period_order,
+                    ]);
+                } else {
+                    AssignmentCourse::create([
+                        'assignment_id' => $assignment->id,
+                        'course_id' => $course->id,
+                        'teacher_id' => $data['user_id'],
+                        'default_period_order' => $data['default_period_order'] ?? null,
+                    ]);
+                }
+            });
+
+        } else {
+            // MezmurTraining update
+            $rules = [
+                'trainer_id' => 'required|exists:trainers,id',
+                'mezmur_ids' => 'required|array|min:1',
+                'mezmur_ids.*' => 'exists:mezmurs,id',
+                'location' => 'nullable|string',
+                'day_of_week' => 'nullable|integer|min:0|max:6',
+                'start_time' => 'nullable|date_format:H:i',
+                'end_time' => 'nullable|date_format:H:i',
+                'active' => 'nullable|boolean',
+            ];
+
+            $data = $request->validate($rules);
+
+            DB::transaction(function () use ($assignment, $data) {
+                $assignment->update([
+                    'trainer_id' => $data['trainer_id'],
+                    'location' => $data['location'] ?? $assignment->location,
+                    'day_of_week' => $data['day_of_week'] ?? $assignment->day_of_week,
+                    'start_time' => $data['start_time'] ?? $assignment->start_time,
+                    'end_time' => $data['end_time'] ?? $assignment->end_time,
+                    'active' => $data['active'] ?? $assignment->active,
+                ]);
+
+                $assignment->mezmurs()->sync($data['mezmur_ids']);
+            });
+        }
+
+        $assignment->load([
+            'section',
+            'trainer',
+            'teacher',
+            'mezmurs',
+            'assignmentCourses.course',
+            'assignmentCourses.teacher'
+        ]);
+
+        return response()->json($assignment);
+    }
+
+
+    public function destroy(Assignment $assignment)
+    {
+        $user = Auth::user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        // Role-based permission for deleting
+        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $assignment->delete();
+
+        return response()->json(['message' => 'Assignment deleted']);
+    }
+}

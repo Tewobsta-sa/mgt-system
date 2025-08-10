@@ -6,16 +6,19 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('assignments', function (Blueprint $t) {
             $t->id();
-            $t->enum('type', ['MezmurTraining', 'Course']); // template type
-            $t->foreignId('section_id')->nullable()->constrained('sections')->nullOnDelete(); // for Course type
-            $t->foreignId('user_id')->constrained('users'); // trainer or teacher (owner/lead)
+            $t->enum('type', ['MezmurTraining', 'Course']);
+            $t->foreignId('section_id')->nullable()->constrained('sections')->nullOnDelete();
+
+            // Trainer (used for MezmurTraining) - trainers table should exist
+            $t->foreignId('trainer_id')->nullable()->constrained('trainers')->nullOnDelete();
+
+            // user_id used for Course assignments (teacher)
+            $t->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
+
             $t->string('location')->nullable();
             $t->tinyInteger('day_of_week')->nullable()->comment('0=Sun..6=Sat');
             $t->time('start_time')->nullable();
@@ -25,9 +28,6 @@ return new class extends Migration
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('assignments');

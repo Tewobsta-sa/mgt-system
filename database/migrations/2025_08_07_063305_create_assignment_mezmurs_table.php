@@ -6,21 +6,19 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('assignment_mezmurs', function (Blueprint $t) {
+            $t->id();
             $t->foreignId('assignment_id')->constrained('assignments')->cascadeOnDelete();
             $t->foreignId('mezmur_id')->constrained('mezmurs')->cascadeOnDelete();
-            $t->primary(['assignment_id','mezmur_id']);
+            $t->timestamps();
+
+            // Keep unique pair so the same mezmur isn't attached twice to same assignment
+            $t->unique(['assignment_id', 'mezmur_id'], 'uniq_assignment_mezmur');
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('assignment_mezmurs');

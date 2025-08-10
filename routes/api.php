@@ -14,6 +14,7 @@ use App\Http\Controllers\MinistryController;
 use App\Http\Controllers\TrainerController;
 use App\Http\Controllers\MezmurCategoryTypeController;
 use App\Http\Controllers\MezmurCategoryController;
+use App\Http\Controllers\CourseController;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
@@ -72,16 +73,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::apiResource('mezmurs', MezmurController::class);
 
     });
+
+     Route::apiResource('assignments', AssignmentController::class);
+     Route::apiResource('courses', CourseController::class);
 });
-
-
-
-Route::get('/assignments', [AssignmentController::class,'index']);
-Route::post('/assignments', [AssignmentController::class,'store']);
-Route::get('/assignments/{id}', [AssignmentController::class,'show']);
-Route::patch('/assignments/{id}/deactivate', [AssignmentController::class,'deactivate']);
-// (optional) Route::put('/assignments/{id}', ...)
-
 Route::get('/schedules', [ScheduleController::class,'index']);
 Route::post('/schedules', [ScheduleController::class,'store']);
 Route::get('/schedules/{id}', [ScheduleController::class,'show']);
