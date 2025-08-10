@@ -74,13 +74,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     });
 
-     Route::apiResource('assignments', AssignmentController::class);
-     Route::apiResource('courses', CourseController::class);
+    Route::apiResource('assignments', AssignmentController::class);
+    Route::get('schedule', [AssignmentController::class, 'schedule']);
+    Route::apiResource('courses', CourseController::class);
 });
-Route::get('/schedules', [ScheduleController::class,'index']);
-Route::post('/schedules', [ScheduleController::class,'store']);
-Route::get('/schedules/{id}', [ScheduleController::class,'show']);
-Route::delete('/schedules/{id}', [ScheduleController::class,'destroy']);
 
 Route::get('/attendance/block/{blockId}', [AttendanceController::class,'indexByBlock']);
 Route::post('/attendance/bulk', [AttendanceController::class,'bulkUpsert']);
