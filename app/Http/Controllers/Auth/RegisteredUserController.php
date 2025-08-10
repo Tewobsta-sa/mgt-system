@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Spatie\Permission\Models\Role;
 
 class RegisteredUserController extends Controller
 {
@@ -55,12 +56,12 @@ class RegisteredUserController extends Controller
         \Log::info('Role passed: ' . $role);
         return match ($role) {
             'mezmur_office_admin' => ['mezmur_office_coordinator'],
-            'tmhrt_office_admin' => ['regular_teacher', 'tmhrt_office_coordinator'],
-            'distance_admin' => ['distance_teacher', 'distance_coordinator'],
+            'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
+            'distance_admin' => ['teacher', 'distance_coordinator'],
             'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
                 'mezmur_office_coordinator',
-                'regular_teacher', 'tmhrt_office_coordinator', 'distance_teacher',
+                'teacher', 'tmhrt_office_coordinator',
                 'distance_coordinator', 'gngnunet_office_coordinator', 'student',
                 'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
                 'gngnunet_office_admin', 'super_admin'

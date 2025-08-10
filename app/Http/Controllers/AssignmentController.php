@@ -131,6 +131,12 @@ public function show(Assignment $assignment)
                 return response()->json(['message' => 'Course not found by name'], 422);
             }
 
+            if ($section->program_type_id !== $course->program_type_id) {
+                return response()->json([
+                    'message' => 'The Section and Course program types do not match.'
+                ], 422);
+            }
+
             DB::beginTransaction();
             try {
                 $assignment = Assignment::create([
@@ -275,6 +281,12 @@ public function show(Assignment $assignment)
             $course = Course::where('name', $data['course'])->first();
             if (!$course) {
                 return response()->json(['message' => 'Course not found by name'], 422);
+            }
+
+            if ($section->program_type_id !== $course->program_type_id) {
+                return response()->json([
+                    'message' => 'The Section and Course program types do not match.'
+                ], 422); 
             }
 
             DB::transaction(function () use ($assignment, $data, $section, $course) {
