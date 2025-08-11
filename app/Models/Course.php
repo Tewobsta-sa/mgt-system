@@ -7,5 +7,9 @@ use Illuminate\Database\Eloquent\Model;
 class Course extends Model {
     protected $fillable = ['name','credit_hour','duration','program_type_id'];
     public function programType(){ return $this->belongsTo(ProgramType::class); }
+    public function assessments()
+    {
+        return $this->hasMany(Assessment::class);
+    }
 }
 

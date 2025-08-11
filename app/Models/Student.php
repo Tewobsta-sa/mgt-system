@@ -21,6 +21,11 @@ class Student extends Model
         return $this->hasMany(Contact::class);
     }
 
+    public function grades()
+    {
+        return $this->hasMany(Grade::class);
+    }
+
     protected $fillable = [
         'student_id',
         'name',

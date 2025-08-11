@@ -15,6 +15,9 @@ use App\Http\Controllers\TrainerController;
 use App\Http\Controllers\MezmurCategoryTypeController;
 use App\Http\Controllers\MezmurCategoryController;
 use App\Http\Controllers\CourseController;
+use App\Http\Controllers\AssessmentController;
+use App\Http\Controllers\GradeController;
+use App\Http\Controllers\StudentGradeController;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
@@ -79,6 +82,15 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('courses', CourseController::class);
     Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
     Route::get('attendance', [AttendanceController::class, 'getAttendance']);
+
+    Route::apiResource('assessments', AssessmentController::class);
+    Route::get('grades', [GradeController::class, 'index']);
+    Route::post('grades', [GradeController::class, 'store']);
+    Route::delete('grades/{id}', [GradeController::class, 'destroy']);
+
+    Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
+    Route::get('courses/{courseId}/grades', [GradeController::class, 'gradesForCourse']);
+
 
 });
 
