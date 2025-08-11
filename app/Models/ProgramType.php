@@ -18,6 +18,12 @@ class ProgramType extends Model
         return $this->belongsToMany(User::class, 'program_type_user');
     }
 
+    public function courses()
+    {
+        return $this->hasMany(Course::class);
+    }
+
+
 
     protected $fillable = [
         'name',

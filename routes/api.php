@@ -67,6 +67,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     //section and program type
     Route::apiResource('program-types', ProgramTypeController::class);
+    Route::get('/program-types/{id}/sections', [ProgramTypeController::class, 'sections']);
+    Route::get('/program-types/{id}/courses', [ProgramTypeController::class, 'courses']);
+    Route::get('/program-types/{id}/teachers', [ProgramTypeController::class, 'teachers']);
+    Route::get('/program-types/{id}/students', [ProgramTypeController::class, 'students']);
+
+    
     Route::apiResource('sections', SectionController::class);
     Route::get('sections/{id}/courses', [SectionController::class, 'courses']);
     Route::get('sections/{id}/students', [SectionController::class, 'students']);
