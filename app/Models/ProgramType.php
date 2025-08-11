@@ -13,6 +13,12 @@ class ProgramType extends Model
         return $this->hasMany(Section::class);
     }
 
+    public function users()
+    {
+        return $this->belongsToMany(User::class, 'program_type_user');
+    }
+
+
     protected $fillable = [
         'name',
         'description' // optional if you have a description

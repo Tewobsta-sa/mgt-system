@@ -155,8 +155,15 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
+            // Check that section and course program types match
             if ($section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
+            }
+
+            // Check that teacher's program types include the course/section program type
+            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('id')->toArray();
+            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
+                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(
@@ -340,8 +347,15 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
+            // Check that section and course program types match
             if ($section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
+            }
+
+            // Check that teacher's program types include the course/section program type
+            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('id')->toArray();
+            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
+                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(

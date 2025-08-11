@@ -48,4 +48,10 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
     ];
+
+
+    public function programTypes()
+    {
+        return $this->belongsToMany(ProgramType::class, 'program_type_user');
+    }
 }

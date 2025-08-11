@@ -4,10 +4,10 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\ProgramType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Spatie\Permission\Models\Role;
 
 class RegisteredUserController extends Controller
 {
@@ -18,6 +18,7 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request)
     {
+        
         $request->validate([
             'name' => 'required|string|max:255',
             'username' => 'required|string|unique:users',
@@ -25,18 +26,33 @@ class RegisteredUserController extends Controller
             'role' => 'required|string',
             'security_question' => 'required|string|max:255',
             'security_answer' => 'required|string|max:255',
+            'program_type_ids' => 'array',
+            'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
         $currentRole = $request->user()->getRoleNames()->first();
         $targetRole = $request->role;
 
-        $allowedRoles = $this->allowedToRegister($currentRole);
-
         \Log::info('Current Role: ' . $currentRole);
-        \Log::info('Allowed Roles: ', $allowedRoles);
+\Log::info('Program Types trying to assign: ' . implode(',', $request->program_type_ids));
+\Log::info('Allowed Program Types for role: ' . implode(',', $allowedProgramTypesByRole[$currentRole] ?? []));
+
+
+        $allowedRoles = $this->allowedToRegister($currentRole);
 
         if (!in_array($targetRole, $allowedRoles)) {
             return response()->json(['error' => 'You are not allowed to register this role'], 403);
+        }
+
+        // If role is teacher, check program type restrictions
+        if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
+            $allowedProgramTypeIds = $this->allowedProgramTypeIdsForAdmin($currentRole);
+
+            foreach ($request->program_type_ids as $ptId) {
+                if (!in_array($ptId, $allowedProgramTypeIds)) {
+                    return response()->json(['error' => 'You cannot assign this program type'], 403);
+                }
+            }
         }
 
         $user = User::create([
@@ -48,15 +64,20 @@ class RegisteredUserController extends Controller
         ]);
         $user->assignRole($targetRole);
 
+        // Assign program types if teacher
+        if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
+            $user->programTypes()->sync($request->program_type_ids);
+        }
+
         return response()->json(['message' => 'User registered successfully'], 201);
     }
 
     private function allowedToRegister($role)
     {
-        \Log::info('Role passed: ' . $role);
         return match ($role) {
             'mezmur_office_admin' => ['mezmur_office_coordinator'],
             'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
+            'young_tmhrt_office_admin' => ['teacher'],  // assuming young admin role added
             'distance_admin' => ['teacher', 'distance_coordinator'],
             'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
@@ -69,6 +90,30 @@ class RegisteredUserController extends Controller
             default => []
         };
     }
+
+    /**
+     * Return allowed program_type IDs based on admin role.
+     */
+    private function allowedProgramTypeIdsForAdmin($adminRole)
+        {
+            $allProgramTypesRaw = ProgramType::pluck('id', 'name')->toArray();
+            $allProgramTypes = [];
+            foreach ($allProgramTypesRaw as $name => $id) {
+                $allProgramTypes[strtolower($name)] = $id;
+            }
+
+            \Log::info('All Program Types:', $allProgramTypes);
+
+            return match ($adminRole) {
+                'tmhrt_office_admin' => isset($allProgramTypes['regular']) ? [$allProgramTypes['regular']] : [],
+                'young_tmhrt_office_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
+                'distance_admin' => isset($allProgramTypes['distance']) ? [$allProgramTypes['distance']] : [],
+                'super_admin' => array_values($allProgramTypes),
+                default => []
+            };
+}
+
+
 
     public function forgotPassword(Request $request)
     {
@@ -101,6 +146,8 @@ class RegisteredUserController extends Controller
             'current_password' => 'required_with:password',
             'security_question' => 'nullable|string|max:255',
             'security_answer' => 'nullable|string|max:255',
+            'program_type_ids' => 'array',
+            'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
         if ($request->filled('password')) {
@@ -117,6 +164,20 @@ class RegisteredUserController extends Controller
         }
 
         $user->save();
+
+        // Validate program types for update as well
+        if ($user->hasRole('teacher') && $request->filled('program_type_ids')) {
+            $currentRole = $request->user()->getRoleNames()->first();
+            $allowedProgramTypeIds = $this->allowedProgramTypeIdsForAdmin($currentRole);
+
+            foreach ($request->program_type_ids as $ptId) {
+                if (!in_array($ptId, $allowedProgramTypeIds)) {
+                    return response()->json(['error' => 'You cannot assign this program type'], 403);
+                }
+            }
+
+            $user->programTypes()->sync($request->program_type_ids);
+        }
 
         return response()->json(['message' => 'Profile updated successfully'], 200);
     }
@@ -135,6 +196,8 @@ class RegisteredUserController extends Controller
             'password' => 'nullable|string|min:8|confirmed',
             'security_question' => 'nullable|string|max:255',
             'security_answer' => 'nullable|string|max:255',
+            'program_type_ids' => 'array',
+            'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
         $user->fill($request->only(['name', 'username', 'security_question']));
@@ -148,6 +211,10 @@ class RegisteredUserController extends Controller
         }
 
         $user->save();
+
+        if ($user->hasRole('teacher') && $request->filled('program_type_ids')) {
+            $user->programTypes()->sync($request->program_type_ids);
+        }
 
         return response()->json(['message' => 'User updated successfully'], 200);
     }

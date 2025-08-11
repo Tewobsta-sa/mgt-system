@@ -11,5 +11,10 @@ class Course extends Model {
     {
         return $this->hasMany(Assessment::class);
     }
+
+    public function assignmentCourses()
+    {
+        return $this->hasMany(AssignmentCourse::class, 'course_id');
+    }
 }
 

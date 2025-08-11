@@ -68,6 +68,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
     //section and program type
     Route::apiResource('program-types', ProgramTypeController::class);
     Route::apiResource('sections', SectionController::class);
+    Route::get('sections/{id}/courses', [SectionController::class, 'courses']);
+    Route::get('sections/{id}/students', [SectionController::class, 'students']);
+    Route::get('sections/{id}/teachers', [SectionController::class, 'teachers']);
+    Route::post('sections/{id}/assign-course', [SectionController::class, 'assignCourse']);
 
     Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|mezmur_office_coordinator'])->group(function () {
         Route::apiResource('trainers', TrainerController::class);
