@@ -7,7 +7,6 @@ use App\Http\Controllers\SectionController;
 use Illuminate\Support\Facades\Route;
 use Spatie\Permission\Middleware\RoleMiddleware;
 use App\Http\Controllers\AssignmentController ;
-use App\Http\Controllers\ScheduleController;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\MezmurController;
 use App\Http\Controllers\MinistryController;
@@ -72,7 +71,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/program-types/{id}/teachers', [ProgramTypeController::class, 'teachers']);
     Route::get('/program-types/{id}/students', [ProgramTypeController::class, 'students']);
 
-    
+
     Route::apiResource('sections', SectionController::class);
     Route::get('sections/{id}/courses', [SectionController::class, 'courses']);
     Route::get('sections/{id}/students', [SectionController::class, 'students']);
