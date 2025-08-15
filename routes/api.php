@@ -84,6 +84,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/students/mezmur/assign', [StudentController::class, 'assignMezmur']);
         Route::post('/students/mezmur/unassign', [StudentController::class, 'unassignMezmur']);
         Route::get('/students/mezmur', [StudentController::class, 'indexMezmur']);
+
+        Route::get('/ministry-assignments', [MinistryController::class, 'index']);
+        Route::get('/ministry-assignments/{id}', [MinistryController::class, 'show']);
+        Route::post('/ministry-assignments', [MinistryController::class, 'store']);
+        Route::put('/ministry-assignments/{id}', [MinistryController::class, 'update']);
+        Route::delete('/ministry-assignments/{id}', [MinistryController::class, 'destroy']);
+
+        // Manual add/remove students
+        Route::post('/ministry-assignments/{id}/students/add', [MinistryController::class, 'addStudents']);
+        Route::post('/ministry-assignments/{id}/students/remove', [MinistryController::class, 'removeStudents']);
+
+        // Re-run auto assignment
+        Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
     Route::apiResource('assignments', AssignmentController::class);
