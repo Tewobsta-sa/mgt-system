@@ -44,7 +44,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
             Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
             Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
         });
-
         Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
             Route::get('young', [StudentController::class, 'indexYoung']);
             Route::post('young', [StudentController::class, 'storeYoung']);
@@ -52,7 +51,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
             Route::put('young/{id}', [StudentController::class, 'updateYoung']);
             Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
         });
-
         Route::middleware([RoleMiddleware::class . ':distance_coordinator|distance_admin'])->group(function () {
             Route::get('distance', [StudentController::class, 'indexDistance']);
             Route::post('distance', [StudentController::class, 'storeDistance']);
