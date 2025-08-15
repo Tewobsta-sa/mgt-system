@@ -374,4 +374,55 @@ class StudentController extends Controller
         $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
         return "{$prefix}/{$count}";
     }
+
+    public function assignMezmur(Request $request)
+    {
+        $request->validate([
+            'student_ids' => 'required|array',
+            'student_ids.*' => 'exists:students,id'
+        ]);
+
+        DB::transaction(function () use ($request) {
+            Student::whereIn('id', $request->student_ids)
+                ->update(['is_mezmur' => true]);
+        });
+
+        return response()->json(['message' => 'Students assigned to Mezmur successfully.']);
+    }
+
+    public function unassignMezmur(Request $request)
+    {
+        $request->validate([
+            'student_ids' => 'required|array',
+            'student_ids.*' => 'exists:students,id'
+        ]);
+
+        DB::transaction(function () use ($request) {
+            Student::whereIn('id', $request->student_ids)
+                ->update(['is_mezmur' => false]);
+        });
+
+        return response()->json(['message' => 'Students removed from Mezmur successfully.']);
+    }
+
+    public function indexMezmur(Request $request)
+    {
+        $search = $request->query('search');
+
+        $query = Student::with(['address', 'contacts', 'section.programType'])
+            ->where('is_mezmur', true);
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%$search%")
+                ->orWhere('student_id', 'like', "%$search%");
+            });
+        }
+
+        return $query->orderBy('id', 'desc')->paginate(10);
+    }
+
+
 }
+
+

@@ -81,7 +81,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::apiResource('mezmur-category-types', MezmurCategoryTypeController::class);
         Route::apiResource('mezmur-categories', MezmurCategoryController::class);
         Route::apiResource('mezmurs', MezmurController::class);
-
+        Route::post('/students/mezmur/assign', [StudentController::class, 'assignMezmur']);
+        Route::post('/students/mezmur/unassign', [StudentController::class, 'unassignMezmur']);
+        Route::get('/students/mezmur', [StudentController::class, 'indexMezmur']);
     });
 
     Route::apiResource('assignments', AssignmentController::class);
