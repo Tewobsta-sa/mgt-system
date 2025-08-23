@@ -3,95 +3,192 @@
 namespace App\Http\Controllers;
 
 use App\Models\Student;
-use App\Models\ProgramType;
 use App\Models\Section;
+use App\Models\ProgramType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 
 class StudentPromotionController extends Controller
 {
-    public function promoteStudent($studentId)
+    /**
+     * ✅ Verify a single student
+     */
+    public function verifyStudent($studentId)
     {
-        $student = Student::with('programType', 'section')->findOrFail($studentId);
-        return $this->promote([$student]);
+        $student = Student::findOrFail($studentId);
+
+        if ($student->is_verified) {
+            return response()->json([
+                'message' => 'Student is already verified.'
+            ], 200);
+        }
+
+        $student->is_verified = true;
+        $student->verified_by = Auth::id();
+        $student->verified_at = now();
+        $student->save();
+
+        return response()->json([
+            'message' => 'Student verified successfully',
+            'student' => $student
+        ]);
     }
 
-    public function promoteVerifiedStudents(Request $request)
+    /**
+     * ✅ Bulk verify students
+     */
+    public function bulkVerify(Request $request)
     {
-        $students = Student::with('programType', 'section')
+        $request->validate([
+            'student_ids'   => 'required|array',
+            'student_ids.*' => 'exists:students,id',
+        ]);
+
+        DB::transaction(function () use ($request) {
+            Student::whereIn('id', $request->student_ids)
+                ->update([
+                    'is_verified' => true,
+                    'verified_by' => Auth::id(),
+                    'verified_at' => now(),
+                ]);
+        });
+
+        return response()->json([
+            'message' => 'Selected students have been verified successfully.',
+        ]);
+    }
+
+    /**
+     * ✅ Promote only REGULAR program students
+     */
+    public function promoteRegular()
+    {
+        $students = Student::with('section.programType')
+            ->whereHas('section.programType', fn($q) => $q->where('name', 'Regular'))
             ->where('is_verified', true)
             ->get();
 
-        return $this->promote($students);
+        return $this->promote($students, 'Regular');
     }
 
-    private function promote($students)
+    /**
+     * ✅ Promote only YOUNG program students
+     */
+    public function promoteYoung()
     {
-        $programTypes = ProgramType::with('sections')->get()->keyBy('name');
+        $students = Student::with('section.programType')
+            ->whereHas('section.programType', fn($q) => $q->where('name', 'Young'))
+            ->where('is_verified', true)
+            ->get();
 
-        return DB::transaction(function () use ($students, $programTypes) {
-            $updated = [];
+        return $this->promote($students, 'Young');
+    }
 
-            foreach ($students as $student) {
-                $currentProgram = $student->programType->name;
+    /**
+     * ✅ Promote only DISTANCE program students
+     */
+    public function promoteDistance()
+    {
+        $students = Student::with('section.programType')
+            ->whereHas('section.programType', fn($q) => $q->where('name', 'Distance'))
+            ->where('is_verified', true)
+            ->get();
 
-                if ($currentProgram === 'Young') {
-                    $lastSection = $programTypes['Young']->sections()->orderBy('id', 'desc')->first()->id;
+        return $this->promote($students, 'Distance');
+    }
 
-                    if ($student->section_id != $lastSection) {
-                        $student->section_id = $this->getNextSectionId($student->section_id, $programTypes['Young']);
-                    } else {
-                        $student->program_type_id = $programTypes['Regular']->id;
-                        $student->section_id = $programTypes['Regular']->sections()->orderBy('id')->first()->id;
-                        $student->student_id = $this->generateStudentId('REG');
-                    }
+    /**
+     * ✅ Core promotion logic
+     */
+    private function promote($students, string $programName)
+{
+    // Load all program types with their sections ordered
+    $programTypes = ProgramType::with(['sections' => function ($q) {
+        $q->orderBy('order_no');
+    }])->get()->keyBy('name');
 
-                } elseif ($currentProgram === 'Regular') {
-                    $lastSection = $programTypes['Regular']->sections()->orderBy('id', 'desc')->first()->id;
+    return DB::transaction(function () use ($students, $programTypes, $programName) {
+        $updated = [];
 
-                    if ($student->section_id != $lastSection) {
-                        $student->section_id = $this->getNextSectionId($student->section_id, $programTypes['Regular']);
-                    } else {
-                        $student->section_id = null;
-                        $student->status = 'Graduated';
-                    }
+        foreach ($students as $student) {
+            // Get the actual program from the student's section
+            $studentProgram = $student->section->programType->name ?? null;
 
-                } elseif ($currentProgram === 'Distance') {
-                    $student->program_type_id = $programTypes['Regular']->id;
-                    $student->section_id = $programTypes['Regular']->sections()->orderBy('id')->first()->id;
-                    $student->student_id = $this->generateStudentId('REG');
-                }
-
-                $student->save();
-                $updated[] = $student;
+            // Safety check
+            if ($studentProgram !== $programName) {
+                continue;
             }
 
-            return response()->json([
-                'message' => count($updated) . ' student(s) promoted successfully',
-                'students' => $updated
-            ]);
-        });
-    }
+            $currentProgram = $programTypes[$studentProgram] ?? null;
+            $currentSections = $currentProgram ? $currentProgram->sections : collect();
+            $lastSectionId = optional($currentSections->last())->id;
 
-    private function getNextSectionId($currentSectionId, $programType)
-    {
-        $sections = $programType->sections()->orderBy('id')->pluck('id')->toArray();
-        $currentIndex = array_search($currentSectionId, $sections);
+            if ($studentProgram === 'Young') {
+                if ($student->section_id !== $lastSectionId) {
+                    $student->section_id = $this->getNextSectionIdByOrder($student->section_id, $currentSections);
+                } else {
+                    $firstRegular = $programTypes['Regular']->sections->first();
+                    if ($firstRegular) {
+                        $student->section_id = $firstRegular->id;
+                        $student->student_id = $this->generateStudentId('REG');
+                    }
+                }
 
-        if ($currentIndex !== false && isset($sections[$currentIndex + 1])) {
-            return $sections[$currentIndex + 1];
+            } elseif ($studentProgram === 'Regular') {
+                if ($student->section_id !== $lastSectionId) {
+                    $student->section_id = $this->getNextSectionIdByOrder($student->section_id, $currentSections);
+                } else {
+                    $student->section_id = null;
+                    $student->status = 'Graduated';
+                }
+
+            } elseif ($studentProgram === 'Distance') {
+                $firstRegular = $programTypes['Regular']->sections->first();
+                if ($firstRegular) {
+                    $student->section_id = $firstRegular->id;
+                    $student->student_id = $this->generateStudentId('REG');
+                }
+            }
+
+            // Reset verification after promotion
+            $student->is_verified = false;
+            $student->save();
+            $updated[] = $student;
         }
 
+        return response()->json([
+            'message' => count($updated) . " {$programName} student(s) promoted successfully",
+            'students' => $updated
+        ]);
+    });
+}
+
+
+    private function getNextSectionIdByOrder($currentSectionId, $orderedSections)
+    {
+        $index = $orderedSections->search(fn($s) => $s->id === $currentSectionId);
+        if ($index !== false && isset($orderedSections[$index + 1])) {
+            return $orderedSections[$index + 1]->id;
+        }
         return $currentSectionId;
     }
 
     private function generateStudentId(string $prefix, ?string $round = null): string
     {
-        if ($prefix === 'DIS' && $round) {
-            $count = Student::where('student_id', 'like', "{$prefix}/{$round}/%")->count() + 1;
-            return "{$prefix}/{$round}/{$count}";
-        }
-        $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
-        return "{$prefix}/{$count}";
+        return retry(3, function () use ($prefix, $round) {
+            if ($prefix === 'DIS' && $round) {
+                $count = Student::where('student_id', 'like', "{$prefix}/{$round}/%")->count() + 1;
+                $candidate = "{$prefix}/{$round}/{$count}";
+            } else {
+                $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
+                $candidate = "{$prefix}/{$count}";
+            }
+
+            if (Student::where('student_id', $candidate)->exists()) {
+                throw new \RuntimeException('collision');
+            }
+            return $candidate;
+        }, 50);
     }
 }

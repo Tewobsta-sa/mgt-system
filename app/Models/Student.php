@@ -39,5 +39,9 @@ class Student extends Model
         'round',
         'educational_level',
         'address_id',
+        'status',        
+        'is_verified',   
+        'verified_by',   
+        'verified_at', 
     ];
 }

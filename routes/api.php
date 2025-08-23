@@ -17,6 +17,7 @@ use App\Http\Controllers\CourseController;
 use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\GradeController;
 use App\Http\Controllers\StudentGradeController;
+use App\Http\Controllers\StudentPromotionController;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
@@ -44,10 +45,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
             Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
             Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
         });
-        Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
-            Route::get('young', [StudentController::class, 'indexYoung']);
-            Route::post('young', [StudentController::class, 'storeYoung']);
+        Route::middleware([RoleMiddleware::class . ':young_super_admin|young_mezmur_admin|young_gngnunet_admin'])->group(function () {
             Route::get('young/{id}', [StudentController::class, 'showYoung']);
+            Route::get('young', [StudentController::class, 'indexYoung']);
+        });    
+        Route::middleware([RoleMiddleware::class . ':young_gngnunet_admin'])->group(function () {
+            Route::post('young', [StudentController::class, 'storeYoung']);
             Route::put('young/{id}', [StudentController::class, 'updateYoung']);
             Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
         });
@@ -60,6 +63,27 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
 
     });
+
+
+    // Single verify
+    Route::post('students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
+
+    // Bulk verify
+    Route::post('students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
+
+    // Program promotions
+    Route::middleware([RoleMiddleware::class . ':regular_admin|tmhrt_office_admin'])->group(function () {
+        Route::post('promote/regular', [StudentPromotionController::class, 'promoteRegular']);
+    });
+
+    Route::middleware([RoleMiddleware::class . ':young_tmhrt_admin'])->group(function () {
+        Route::post('promote/young', [StudentPromotionController::class, 'promoteYoung']);
+    });
+
+    Route::middleware([RoleMiddleware::class . ':distance_admin|distance_coordinator'])->group(function () {
+        Route::post('promote/distance', [StudentPromotionController::class, 'promoteDistance']);
+    });
+
 
 
     //section and program type

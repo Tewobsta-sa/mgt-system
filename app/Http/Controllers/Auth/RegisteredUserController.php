@@ -33,10 +33,6 @@ class RegisteredUserController extends Controller
         $currentRole = $request->user()->getRoleNames()->first();
         $targetRole = $request->role;
 
-        \Log::info('Current Role: ' . $currentRole);
-\Log::info('Program Types trying to assign: ' . implode(',', $request->program_type_ids));
-\Log::info('Allowed Program Types for role: ' . implode(',', $allowedProgramTypesByRole[$currentRole] ?? []));
-
 
         $allowedRoles = $this->allowedToRegister($currentRole);
 
@@ -77,7 +73,7 @@ class RegisteredUserController extends Controller
         return match ($role) {
             'mezmur_office_admin' => ['mezmur_office_coordinator'],
             'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
-            'young_tmhrt_office_admin' => ['teacher'],  // assuming young admin role added
+            'young_tmhrt_admin' => ['teacher'],  // assuming young admin role added
             'distance_admin' => ['teacher', 'distance_coordinator'],
             'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
@@ -85,7 +81,7 @@ class RegisteredUserController extends Controller
                 'teacher', 'tmhrt_office_coordinator',
                 'distance_coordinator', 'gngnunet_office_coordinator', 'student',
                 'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
-                'gngnunet_office_admin', 'super_admin'
+                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin'
             ],
             default => []
         };
@@ -106,7 +102,7 @@ class RegisteredUserController extends Controller
 
             return match ($adminRole) {
                 'tmhrt_office_admin' => isset($allProgramTypes['regular']) ? [$allProgramTypes['regular']] : [],
-                'young_tmhrt_office_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
+                'young_tmhrt_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
                 'distance_admin' => isset($allProgramTypes['distance']) ? [$allProgramTypes['distance']] : [],
                 'super_admin' => array_values($allProgramTypes),
                 default => []

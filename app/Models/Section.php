@@ -19,6 +19,7 @@ class Section extends Model
 
     protected $fillable = [
         'name',
-        'program_type_id'
+        'program_type_id',
+        'order_no'
     ];
 }
