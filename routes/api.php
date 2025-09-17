@@ -18,20 +18,28 @@ use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\GradeController;
 use App\Http\Controllers\StudentGradeController;
 use App\Http\Controllers\StudentPromotionController;
+use App\Http\Controllers\SystemInitializationController;
+
+// System initialization routes (no authentication required)
+Route::get('/system/status', [SystemInitializationController::class, 'checkStatus']);
+Route::post('/system/initialize', [SystemInitializationController::class, 'initialize']);
+Route::get('/system/roles', [SystemInitializationController::class, 'getAvailableRoles']);
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
+Route::post('/refresh', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'refresh'])->name('refresh');
 Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
 
 Route::middleware('auth:sanctum')->get('/whoami', function () {
     return response()->json(Auth::user());
 });
 
-Route::middleware(['auth:sanctum'])->group(function () {
+Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
     Route::post('/register', [App\Http\Controllers\Auth\RegisteredUserController::class, 'store']); // Authenticated registration
     Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update
     Route::put('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminUpdate']); // Super admin update
     Route::delete('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'destroy']); // Super admin delete
     Route::get('/users', [App\Http\Controllers\Auth\RegisteredUserController::class, 'index']); // Authenticated users can view
+    Route::get('/admin/stats', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminStats']); // Admin statistics
     Route::post('/logout', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'destroy']);// Logout route
 
     

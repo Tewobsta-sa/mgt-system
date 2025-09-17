@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\ProgramType;
+use App\Services\SystemInitializationService;
+use App\Services\AdminManagementService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -18,6 +20,12 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request)
     {
+        // Check if system needs initialization
+        if (SystemInitializationService::needsInitialization()) {
+            return response()->json([
+                'error' => 'System needs initialization. Please use /api/system/initialize endpoint to create the first admin user.'
+            ], 400);
+        }
         
         $request->validate([
             'name' => 'required|string|max:255',
@@ -221,6 +229,18 @@ class RegisteredUserController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
+        $currentUser = Auth::user();
+        
+        // Use the service to check if deletion is allowed
+        $canDelete = AdminManagementService::canDeleteUser($currentUser, $id);
+        
+        if (!$canDelete['can_delete']) {
+            return response()->json([
+                'error' => $canDelete['reason'],
+                'message' => $canDelete['message']
+            ], 400);
+        }
+        
         $user = User::findOrFail($id);
         $user->delete();
 
@@ -237,5 +257,22 @@ class RegisteredUserController extends Controller
         }
 
         return response()->json($query->paginate(10));
+    }
+
+    /**
+     * Get admin statistics
+     */
+    public function adminStats(Request $request)
+    {
+        if (!Auth::check() || !Auth::user()->hasRole('super_admin')) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $stats = AdminManagementService::getAdminStats();
+        
+        return response()->json([
+            'stats' => $stats,
+            'message' => 'Admin statistics retrieved successfully'
+        ]);
     }
 }

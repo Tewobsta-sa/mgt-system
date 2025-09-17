@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
+            'require.init' => \App\Http\Middleware\RequireSystemInitialization::class,
         ]);
 
         //
