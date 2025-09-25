@@ -1,0 +1,54 @@
+name: Deploy Laravel App to cPanel
+
+on:
+  push:
+    branches:
+      - main       # change to your branch if needed
+      - teacher    # include any branch you deploy
+
+jobs:
+  ftp-deploy:
+    name: 🚀 Deploy via FTP
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout your repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2️⃣ Setup PHP 8.3 to match your cPanel
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      # 3️⃣ Install Composer dependencies
+      - name: Install PHP dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      # 4️⃣ Optional: Build frontend (if using Laravel Mix / Vite)
+      - name: Build frontend
+        run: |
+          npm install
+          npm run build
+        continue-on-error: true  # skip if no frontend
+
+      # 5️⃣ Upload via FTP (exclude unnecessary files)
+      - name: Deploy via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.3
+        with:
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ secrets.FTP_PATH }}  # ensure it ends with '/'
+          exclude: |
+            **/.git*
+            **/.github/**
+            node_modules/**
+            vendor/**
+            tests/**
+            .env
+            *.log
+      # 6️⃣ Optional: Run Laravel commands on cPanel via SSH (if possible)
+      # If you can SSH to cPanel, you can run migrations & cache commands here
+      # Otherwise, run them manually in cPanel terminal
