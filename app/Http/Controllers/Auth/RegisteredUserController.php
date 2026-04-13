@@ -89,7 +89,7 @@ class RegisteredUserController extends Controller
                 'teacher', 'tmhrt_office_coordinator',
                 'distance_coordinator', 'gngnunet_office_coordinator', 'student',
                 'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
-                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin'
+                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin','young_gngnunet_admin'
             ],
             default => []
         };
@@ -249,7 +249,7 @@ class RegisteredUserController extends Controller
 
     public function index(Request $request)
     {
-        $query = User::query();
+        $query = User::with('roles');
 
         if ($search = $request->input('search')) {
             $query->where('name', 'like', "%{$search}%")

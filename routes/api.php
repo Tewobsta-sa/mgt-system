@@ -34,81 +34,96 @@ Route::middleware('auth:sanctum')->get('/whoami', function () {
 });
 
 Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
-    Route::post('/register', [App\Http\Controllers\Auth\RegisteredUserController::class, 'store']); // Authenticated registration
-    Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update
-    Route::put('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminUpdate']); // Super admin update
-    Route::delete('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'destroy']); // Super admin delete
-    Route::get('/users', [App\Http\Controllers\Auth\RegisteredUserController::class, 'index']); // Authenticated users can view
-    Route::get('/admin/stats', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminStats']); // Admin statistics
+
     Route::post('/logout', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'destroy']);// Logout route
+    Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update 
 
     
+    Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
+        Route::put('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminUpdate']); // Super admin update
+        Route::delete('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'destroy']); // Super admin delete
+        Route::get('/admin/stats', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminStats']); // Admin statistics
+    });
 
-    Route::prefix('students')->middleware(['auth:sanctum'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin|gngnunet_office_admin|young_gngnunet_admin'])->group(function () {
+        Route::get('/users', [App\Http\Controllers\Auth\RegisteredUserController::class, 'index']); // List all users
+        Route::post('/register', [App\Http\Controllers\Auth\RegisteredUserController::class, 'store']); // Authenticated registration
+    });
 
-        Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin|gngnunet_office_coordinator'])->group(function () {
-            Route::get('regular', [StudentController::class, 'indexRegular']);
-            Route::post('regular', [StudentController::class, 'storeRegular']);
-            Route::get('regular/{id}', [StudentController::class, 'showRegular']);
-            Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
-            Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
-        });
-        Route::middleware([RoleMiddleware::class . ':young_super_admin|young_mezmur_admin|young_gngnunet_admin'])->group(function () {
+    Route::prefix('students')->group(function () {
+
+        Route::middleware([RoleMiddleware::class . ':super_admin|gngnunet_office_admin|young_gngnunet_admin|mezmur_office_admin|tmhrt_office_admin'])->group(function () {
             Route::get('young/{id}', [StudentController::class, 'showYoung']);
             Route::get('young', [StudentController::class, 'indexYoung']);
+        });
+        Route::middleware([RoleMiddleware::class . ':super_admin|gngnunet_office_admin|mezmur_office_admin|tmhrt_office_admin'])->group(function () {
+            Route::get('regular/{id}', [StudentController::class, 'showRegular']);
+            Route::get('regular', [StudentController::class, 'indexRegular']);
+        });
+
+        Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin'])->group(function () {
+            Route::post('regular', [StudentController::class, 'storeRegular']);
+            Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
+            Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
         });    
-        Route::middleware([RoleMiddleware::class . ':young_gngnunet_admin'])->group(function () {
+        Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin|young_gngnunet_admin'])->group(function () {
             Route::post('young', [StudentController::class, 'storeYoung']);
             Route::put('young/{id}', [StudentController::class, 'updateYoung']);
             Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
         });
-        Route::middleware([RoleMiddleware::class . ':distance_coordinator|distance_admin'])->group(function () {
+        Route::middleware([RoleMiddleware::class . ':super_admin|distance_admin'])->group(function () {
             Route::get('distance', [StudentController::class, 'indexDistance']);
-            Route::post('distance', [StudentController::class, 'storeDistance']);
             Route::get('distance/{id}', [StudentController::class, 'showDistance']);
+        });
+        Route::middleware([RoleMiddleware::class . ':distance_admin'])->group(function () {
+            Route::post('distance', [StudentController::class, 'storeDistance']);
             Route::put('distance/{id}', [StudentController::class, 'updateDistance']);
             Route::delete('distance/{id}', [StudentController::class, 'destroyDistance']);
         });
 
     });
 
-
-    // Single verify
-    Route::post('students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
-
-    // Bulk verify
-    Route::post('students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
-
-    // Program promotions
-    Route::middleware([RoleMiddleware::class . ':regular_admin|tmhrt_office_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin'])->group(function () {
+        Route::post('students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
+        Route::post('students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
         Route::post('promote/regular', [StudentPromotionController::class, 'promoteRegular']);
-    });
-
-    Route::middleware([RoleMiddleware::class . ':young_tmhrt_admin'])->group(function () {
         Route::post('promote/young', [StudentPromotionController::class, 'promoteYoung']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':distance_admin|distance_coordinator'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin'])->group(function () {
         Route::post('promote/distance', [StudentPromotionController::class, 'promoteDistance']);
     });
 
-
-
-    //section and program type
-    Route::apiResource('program-types', ProgramTypeController::class);
+    
     Route::get('/program-types/{id}/sections', [ProgramTypeController::class, 'sections']);
     Route::get('/program-types/{id}/courses', [ProgramTypeController::class, 'courses']);
     Route::get('/program-types/{id}/teachers', [ProgramTypeController::class, 'teachers']);
     Route::get('/program-types/{id}/students', [ProgramTypeController::class, 'students']);
-
-
-    Route::apiResource('sections', SectionController::class);
     Route::get('sections/{id}/courses', [SectionController::class, 'courses']);
     Route::get('sections/{id}/students', [SectionController::class, 'students']);
     Route::get('sections/{id}/teachers', [SectionController::class, 'teachers']);
-    Route::post('sections/{id}/assign-course', [SectionController::class, 'assignCourse']);
+    Route::get('schedule', [AssignmentController::class, 'schedule']);
+    Route::get('attendance', [AttendanceController::class, 'getAttendance']);
 
-    Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|mezmur_office_coordinator'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin'])->group(function () {
+        Route::apiResource('program-types', ProgramTypeController::class);
+        Route::apiResource('sections', SectionController::class);
+        Route::post('sections/{id}/assign-course', [SectionController::class, 'assignCourse']);
+        Route::apiResource('courses', CourseController::class);
+    });
+
+    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin|teacher'])->group(function () {
+        Route::apiResource('assessments', AssessmentController::class);
+        Route::get('grades', [GradeController::class, 'index']);
+        Route::post('grades', [GradeController::class, 'store']);
+        Route::delete('grades/{id}', [GradeController::class, 'destroy']);
+
+        Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
+        Route::get('courses/{courseId}/grades', [GradeController::class, 'gradesForCourse']);
+    });
+
+
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin'])->group(function () {
         Route::apiResource('trainers', TrainerController::class);
         Route::apiResource('mezmur-category-types', MezmurCategoryTypeController::class);
         Route::apiResource('mezmur-categories', MezmurCategoryController::class);
@@ -131,26 +146,8 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
-    Route::apiResource('assignments', AssignmentController::class);
-    Route::get('schedule', [AssignmentController::class, 'schedule']);
-    Route::apiResource('courses', CourseController::class);
-    Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
-    Route::get('attendance', [AttendanceController::class, 'getAttendance']);
-
-    Route::apiResource('assessments', AssessmentController::class);
-    Route::get('grades', [GradeController::class, 'index']);
-    Route::post('grades', [GradeController::class, 'store']);
-    Route::delete('grades/{id}', [GradeController::class, 'destroy']);
-
-    Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
-    Route::get('courses/{courseId}/grades', [GradeController::class, 'gradesForCourse']);
-
-
+    Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
+        Route::apiResource('assignments', AssignmentController::class);
+        Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
+    });
 });
-
-Route::get('/ministries', [MinistryController::class,'index']);
-Route::post('/ministries', [MinistryController::class,'store']);
-Route::post('/ministries/assignments', [MinistryController::class,'addAssignment']);
-Route::post('/ministries/assignments/{id}/auto-select', [MinistryController::class,'autoSelectStudents']);
-Route::post('/ministries/assignments/{id}/students', [MinistryController::class,'addStudentManually']);
-Route::delete('/ministries/assignments/{id}/students/{studentId}', [MinistryController::class,'removeStudent']);
