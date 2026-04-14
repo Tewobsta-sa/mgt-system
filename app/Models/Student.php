@@ -43,5 +43,6 @@ class Student extends Model
         'is_verified',   
         'verified_by',   
         'verified_at', 
+        'is_mezmur_member',
     ];
 }

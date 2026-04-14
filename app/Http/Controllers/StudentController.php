@@ -67,6 +67,29 @@ class StudentController extends Controller
         if (strcasecmp($student->section->programType->name, $type) !== 0) {
             return response()->json(['error' => 'Student type mismatch'], 422);
         }
+
+        $courseStats = DB::table('attendances')
+            ->join('assignments', 'attendances.assignment_id', '=', 'assignments.id')
+            ->where('attendances.student_id', $id)
+            ->where('assignments.type', 'Course')
+            ->selectRaw('count(*) as total, sum(case when status in ("Present", "Excused") then 1 else 0 end) as attended')
+            ->first();
+
+        $mezmurStats = DB::table('attendances')
+            ->join('assignments', 'attendances.assignment_id', '=', 'assignments.id')
+            ->where('attendances.student_id', $id)
+            ->where('assignments.type', 'MezmurTraining')
+            ->selectRaw('count(*) as total, sum(case when status in ("Present", "Excused") then 1 else 0 end) as attended')
+            ->first();
+
+        $student->course_attendance_avg = $courseStats && $courseStats->total > 0 
+            ? round(($courseStats->attended / $courseStats->total) * 100, 2) 
+            : 0;
+
+        $student->mezmur_attendance_avg = $mezmurStats && $mezmurStats->total > 0 
+            ? round(($mezmurStats->attended / $mezmurStats->total) * 100, 2) 
+            : 0;
+
         return $student;
     }
 

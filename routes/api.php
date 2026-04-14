@@ -43,6 +43,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::put('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminUpdate']); // Super admin update
         Route::delete('/admin/users/{id}', [App\Http\Controllers\Auth\RegisteredUserController::class, 'destroy']); // Super admin delete
         Route::get('/admin/stats', [App\Http\Controllers\Auth\RegisteredUserController::class, 'adminStats']); // Admin statistics
+        Route::get('/admin/logs', [\App\Http\Controllers\LogController::class, 'index']); // System logs
     });
 
     Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin|gngnunet_office_admin|young_gngnunet_admin'])->group(function () {
