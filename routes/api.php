@@ -19,24 +19,17 @@ use App\Http\Controllers\GradeController;
 use App\Http\Controllers\StudentGradeController;
 use App\Http\Controllers\StudentPromotionController;
 use App\Http\Controllers\SystemInitializationController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ReportController;
 
 // System initialization routes (no authentication required)
-Route::get('/system/status', [SystemInitializationController::class, 'checkStatus']);
-Route::post('/system/initialize', [SystemInitializationController::class, 'initialize']);
-Route::get('/system/roles', [SystemInitializationController::class, 'getAvailableRoles']);
-
-Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
-Route::post('/refresh', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'refresh'])->name('refresh');
-Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
-
-Route::middleware('auth:sanctum')->get('/whoami', function () {
-    return response()->json(Auth::user());
-});
-
-Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
+// ... (lines 24-40) ...
+    Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
 
     Route::post('/logout', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'destroy']);// Logout route
     Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update 
+    Route::get('/dashboard/stats', [DashboardController::class, 'getStats']); // Analytics Dashboard
+    Route::get('/reports/export/{type}', [ReportController::class, 'export']);
 
     
     Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
@@ -120,6 +113,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::delete('grades/{id}', [GradeController::class, 'destroy']);
 
         Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
+        Route::get('sections/{id}/rankings', [StudentGradeController::class, 'sectionRankings']);
         Route::get('courses/{courseId}/grades', [GradeController::class, 'gradesForCourse']);
     });
 

@@ -67,5 +67,64 @@ class StudentGradeController extends Controller
             'overall_average' => $overallAverage
         ]);
     }
+
+    public function sectionRankings($sectionId)
+    {
+        $students = Student::where('section_id', $sectionId)->get();
+        if ($students->isEmpty()) return response()->json([]);
+
+        $rankings = [];
+        foreach ($students as $student) {
+            $totals = $this->calculateStudentTotals($student->id);
+            $rankings[] = [
+                'id' => $student->id,
+                'name' => $student->name,
+                'student_id' => $student->student_id,
+                'overall_average' => $totals['overall_average']
+            ];
+        }
+
+        // Sort by average descending
+        usort($rankings, fn($a, $b) => $b['overall_average'] <=> $a['overall_average']);
+
+        // Only top 10 as requested
+        return response()->json(array_slice($rankings, 0, 10));
+    }
+
+    private function calculateStudentTotals($studentId)
+    {
+        // Helper to avoid code duplication from totals()
+        $student = Student::find($studentId);
+        $courseIds = Assessment::query()->distinct()->pluck('course_id');
+        $courses = Course::whereIn('id', $courseIds)->get();
+
+        $sumCourseGrades = 0;
+        $countCourses = 0;
+
+        foreach ($courses as $course) {
+            $assessments = $course->assessments;
+            if ($assessments->isEmpty()) continue;
+
+            $sumWeighted = 0;
+            $sumWeights = 0;
+            foreach ($assessments as $a) {
+                $sumWeights += (float)$a->weight;
+                $grade = $a->grades()->where('student_id', $studentId)->first();
+                $rawScore = $grade ? (float)$grade->score : 0;
+                if ($a->max_score > 0) {
+                    $sumWeighted += ($rawScore / (float)$a->max_score) * (float)$a->weight;
+                }
+            }
+
+            if ($sumWeights > 0) {
+                $sumCourseGrades += ($sumWeighted / $sumWeights) * 100;
+                $countCourses++;
+            }
+        }
+
+        return [
+            'overall_average' => $countCourses ? round($sumCourseGrades / $countCourses, 2) : 0
+        ];
+    }
 }
 
