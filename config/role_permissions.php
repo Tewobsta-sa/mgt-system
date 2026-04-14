@@ -1,6 +1,7 @@
 <?php 
 return [
     'super_admin' => ['*'],
+    'teacher' => [],
     'mezmur_office_admin' => [
         'mezmur_trainer',
         'wereb_trainer',
@@ -17,5 +18,8 @@ return [
     'gngnunet_office_admin' => [
         'gngnunet_office_coordinator',
         'student'
+    ],
+    'young_gngnunet_admin' => [
+        'gngnunet_office_coordinator'
     ]
 ];

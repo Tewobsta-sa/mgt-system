@@ -62,6 +62,7 @@ class AssignmentController extends Controller
             $query->where('type', 'Course');
         } elseif ($user->hasRole('mezmur_office_admin')) {
             $query->where('type', 'MezmurTraining');
+        } elseif ($user->hasRole('super_admin')) {
         } else {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -96,10 +97,10 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin') && !$user->hasRole('super_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin') && !$user->hasRole('super_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -127,7 +128,9 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
         }
 
-        if ($user->hasRole('tmhrt_office_admin')) {
+        $requestedType = $request->input('type');
+
+        if ($user->hasRole('tmhrt_office_admin') || ($user->hasRole('super_admin') && $requestedType !== 'MezmurTraining')) {
             $rules = [
                 'section' => 'required|string',
                 'user_id' => 'required|exists:users,id',
@@ -216,7 +219,7 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Could not create assignment', 'error' => $e->getMessage()], 500);
             }
         } 
-        elseif ($user->hasRole('mezmur_office_admin')) {
+        elseif ($user->hasRole('mezmur_office_admin') || ($user->hasRole('super_admin') && $requestedType === 'MezmurTraining')) {
             $rules = [
                 'trainer_id' => 'required|exists:trainers,id',
                 'mezmur_ids' => 'required|array|min:1',
@@ -306,10 +309,10 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin') && !$user->hasRole('super_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin') && !$user->hasRole('super_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -476,8 +479,8 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if (($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) ||
-            ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin'))
+        if (($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin') && !$user->hasRole('super_admin')) ||
+            ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin') && !$user->hasRole('super_admin'))
         ) {
             return response()->json(['message' => 'Forbidden'], 403);
         }

@@ -46,7 +46,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::get('/admin/logs', [\App\Http\Controllers\LogController::class, 'index']); // System logs
     });
 
-    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin|gngnunet_office_admin|young_gngnunet_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|gngnunet_office_admin'])->group(function () {
         Route::get('/users', [App\Http\Controllers\Auth\RegisteredUserController::class, 'index']); // List all users
         Route::post('/register', [App\Http\Controllers\Auth\RegisteredUserController::class, 'store']); // Authenticated registration
     });
@@ -147,7 +147,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
         Route::apiResource('assignments', AssignmentController::class);
         Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
     });

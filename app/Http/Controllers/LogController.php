@@ -15,7 +15,7 @@ class LogController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $query = ActivityLog::with('user:id,name,email');
+        $query = ActivityLog::with('user:id,name,username');
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->query('user_id'));

@@ -81,15 +81,16 @@ class RegisteredUserController extends Controller
         return match ($role) {
             'mezmur_office_admin' => ['mezmur_office_coordinator'],
             'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
-            'young_tmhrt_admin' => ['teacher'],  // assuming young admin role added
-            'distance_admin' => ['teacher', 'distance_coordinator'],
             'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
+                'teacher',
+                'mezmur_office_admin',
+                'tmhrt_office_admin',
+                'gngnunet_office_admin',
+                'super_admin',
                 'mezmur_office_coordinator',
-                'teacher', 'tmhrt_office_coordinator',
-                'distance_coordinator', 'gngnunet_office_coordinator', 'student',
-                'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
-                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin','young_gngnunet_admin'
+                'tmhrt_office_coordinator',
+                'gngnunet_office_coordinator',
             ],
             default => []
         };
@@ -109,8 +110,7 @@ class RegisteredUserController extends Controller
             \Log::info('All Program Types:', $allProgramTypes);
 
             return match ($adminRole) {
-                'tmhrt_office_admin' => isset($allProgramTypes['regular']) ? [$allProgramTypes['regular']] : [],
-                'young_tmhrt_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
+                'tmhrt_office_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
                 'distance_admin' => isset($allProgramTypes['distance']) ? [$allProgramTypes['distance']] : [],
                 'super_admin' => array_values($allProgramTypes),
                 default => []
@@ -197,22 +197,11 @@ class RegisteredUserController extends Controller
         $request->validate([
             'name' => 'sometimes|string|max:255',
             'username' => 'sometimes|string|unique:users,username,' . $user->id,
-            'password' => 'nullable|string|min:8|confirmed',
-            'security_question' => 'nullable|string|max:255',
-            'security_answer' => 'nullable|string|max:255',
             'program_type_ids' => 'array',
             'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
-        $user->fill($request->only(['name', 'username', 'security_question']));
-
-        if ($request->filled('password')) {
-            $user->password = Hash::make($request->password);
-        }
-
-        if ($request->filled('security_answer')) {
-            $user->security_answer = Hash::make($request->security_answer);
-        }
+        $user->fill($request->only(['name', 'username']));
 
         $user->save();
 

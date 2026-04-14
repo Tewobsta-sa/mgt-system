@@ -41,7 +41,46 @@ class StudentController extends Controller
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate(10);
+        $paginator = $query->orderBy('id', 'desc')->paginate(10);
+
+        $paginator->getCollection()->transform(function ($student) {
+            $courseStats = DB::table('attendances')
+                ->join('assignments', 'attendances.assignment_id', '=', 'assignments.id')
+                ->where('attendances.student_id', $student->id)
+                ->where('assignments.type', 'Course')
+                ->selectRaw('count(*) as total, sum(case when status in ("Present", "Excused") then 1 else 0 end) as attended')
+                ->first();
+
+            $mezmurStats = DB::table('attendances')
+                ->join('assignments', 'attendances.assignment_id', '=', 'assignments.id')
+                ->where('attendances.student_id', $student->id)
+                ->where('assignments.type', 'MezmurTraining')
+                ->selectRaw('count(*) as total, sum(case when status in ("Present", "Excused") then 1 else 0 end) as attended')
+                ->first();
+
+            $student->course_attendance_avg = $courseStats && $courseStats->total > 0
+                ? round(($courseStats->attended / $courseStats->total) * 100, 2)
+                : 0;
+            $student->mezmur_attendance_avg = $mezmurStats && $mezmurStats->total > 0
+                ? round(($mezmurStats->attended / $mezmurStats->total) * 100, 2)
+                : 0;
+
+            if ($student->address) {
+                $student->subcity = $student->address->subcity;
+                $student->district = $student->address->district;
+                $student->special_place = $student->address->special_place;
+                $student->house_number = $student->address->house_number;
+            }
+            if ($student->contacts && $student->contacts->count() > 0) {
+                $student->parent_name = $student->contacts[0]->name;
+                $student->parent_phone_number = $student->contacts[0]->phone_number;
+            }
+            $student->section_name = $student->section?->name;
+
+            return $student;
+        });
+
+        return $paginator;
     }
 
     // ------------------ SHOW ------------------

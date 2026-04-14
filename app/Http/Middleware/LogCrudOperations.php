@@ -19,10 +19,21 @@ class LogCrudOperations
             if (!$request->is('api/login') && !$request->is('api/refresh') && !$request->is('api/admin/logs')) {
                 $user = Auth::guard('sanctum')->user();
                 
+                $redactedPayload = $request->except([
+                    'password',
+                    'password_confirmation',
+                    'current_password',
+                    'new_password',
+                    'new_password_confirmation',
+                    'security_answer',
+                    'refresh_token',
+                    'token',
+                ]);
+
                 $details = [
                     'url' => $request->fullUrl(),
                     'method' => $request->method(),
-                    'payload' => $request->except(['password', 'password_confirmation']),
+                    'payload' => $redactedPayload,
                     'status_code' => $response->getStatusCode(),
                 ];
 

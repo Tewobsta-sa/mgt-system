@@ -42,9 +42,9 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Assignment does not have a valid section for program type check.'], 422);
         }
 
-        if ($assignment->section->program_type_id !== $student->program_type_id) {
+        if ($assignment->section_id && $student->section_id && $assignment->section_id !== $student->section_id) {
             return response()->json([
-                'message' => 'Program type mismatch: Student and Assignment section program types do not match.'
+                'message' => 'Section mismatch: Student is not assigned to this section.'
             ], 422);
         }
 
@@ -72,7 +72,7 @@ class AttendanceController extends Controller
 
         $query = Attendance::with(['student', 'assignment', 'markedBy']);
 
-        if ($user->hasRole('gngunet_office_admin') || $user->hasRole('gngunet_office_coordinator')) {
+        if ($user->hasRole('gngnunet_office_admin') || $user->hasRole('gngnunet_office_coordinator') || $user->hasRole('super_admin')) {
         } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_office_coordinator')) {
             $query->whereHas('assignment', function ($q) {
                 $q->where('type', 'Course');
