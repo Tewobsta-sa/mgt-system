@@ -86,7 +86,7 @@ class StudentGradeController extends Controller
         : 0;
 
     return response()->json([
-        'student' => $student->only(['id', 'name']),
+        'student' => $student->only(['id', 'name', 'student_id', 'is_verified']),
         'courses' => $results,
         'overall_average' => $overallAverage
     ]);

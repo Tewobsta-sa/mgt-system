@@ -89,7 +89,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
 
     });
 
-    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin|gngnunet_office_admin|super_admin'])->group(function () {
         Route::post('students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
         Route::post('students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
         Route::post('promote/regular', [StudentPromotionController::class, 'promoteRegular']);
