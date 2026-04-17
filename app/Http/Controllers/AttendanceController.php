@@ -24,7 +24,7 @@ class AttendanceController extends Controller
         ]);
 
         $assignment = Assignment::with('section')->findOrFail($validated['assignment_id']);
-        $student = Student::findOrFail($validated['student_id']);
+        $student = Student::with('section')->findOrFail($validated['student_id']);
 
         if ($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator')) {
             if ($assignment->type !== 'MezmurTraining') {
@@ -42,9 +42,26 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Assignment does not have a valid section for program type check.'], 422);
         }
 
-        if ($assignment->section->program_type_id !== $student->program_type_id) {
+        // Students do not store program_type_id directly in this schema; derive it from section.
+        $assignmentProgramTypeId = $assignment->section->program_type_id;
+        $studentProgramTypeId = $student->section?->program_type_id;
+
+        if (is_null($studentProgramTypeId)) {
+            return response()->json([
+                'message' => 'Student does not have a section/program type assigned.'
+            ], 422);
+        }
+
+        if ((int) $assignmentProgramTypeId !== (int) $studentProgramTypeId) {
             return response()->json([
                 'message' => 'Program type mismatch: Student and Assignment section program types do not match.'
+            ], 422);
+        }
+
+        // For course attendance, ensure student belongs to the same section as the assignment.
+        if ($assignment->type === 'Course' && !is_null($assignment->section_id) && (int) $student->section_id !== (int) $assignment->section_id) {
+            return response()->json([
+                'message' => 'Section mismatch: Student is not in the assigned section for this course.'
             ], 422);
         }
 
@@ -70,9 +87,20 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        $query = Attendance::with(['student', 'assignment', 'markedBy']);
+        $query = Attendance::with([
+            'student',
+            'markedBy',
+            'assignment.section',
+            'assignment.trainer',
+            'assignment.teacher',
+            'assignment.assignmentCourses.course',
+            'assignment.mezmurs',
+        ]);
 
-        if ($user->hasRole('gngunet_office_admin') || $user->hasRole('gngunet_office_coordinator')) {
+        if ($user->hasRole('super_admin')) {
+            // All schedule types
+        } elseif ($user->hasRole('gngnunet_office_admin') || $user->hasRole('gngnunet_office_coordinator')) {
+            // No type filter
         } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_office_coordinator')) {
             $query->whereHas('assignment', function ($q) {
                 $q->where('type', 'Course');
@@ -80,6 +108,10 @@ class AttendanceController extends Controller
         } elseif ($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator')) {
             $query->whereHas('assignment', function ($q) {
                 $q->where('type', 'MezmurTraining');
+            });
+        } elseif ($user->hasRole('teacher')) {
+            $query->whereHas('assignment', function ($q) {
+                $q->where('type', 'Course');
             });
         } else {
             return response()->json(['message' => 'Forbidden: Your role cannot view attendance.'], 403);

@@ -15,10 +15,16 @@ class AssessmentController extends Controller
     {
         $query = Assessment::with('course');
 
+        if ($request->filled('course_id')) {
+            $query->where('course_id', $request->query('course_id'));
+        }
+
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where('title', 'like', "%{$s}%")
+            $query->where(function($q) use ($s) {
+                $q->where('title', 'like', "%{$s}%")
                   ->orWhereHas('course', fn($q) => $q->where('name', 'like', "%{$s}%"));
+            });
         }
 
         $perPage = (int) $request->input('per_page', 15);
@@ -45,6 +51,13 @@ class AssessmentController extends Controller
             'weight'    => ['required','numeric','min:0','max:100'],
             'type'      => ['nullable','string','max:100']
         ]);
+
+        // Keep grading model consistent: component weight defines max score.
+        // Example: weight 30 => this component is marked out of 30.
+        $data['max_score'] = (int) round((float) $data['weight']);
+        if ($data['max_score'] < 1) {
+            return response()->json(['message' => 'Assessment weight must be at least 1'], 422);
+        }
 
         $assessment = null;
         DB::transaction(function() use ($data, &$assessment) {
@@ -73,6 +86,11 @@ class AssessmentController extends Controller
             'weight'    => ['required','numeric','min:0','max:100'],
             'type'      => ['nullable','string','max:100']
         ]);
+
+        $data['max_score'] = (int) round((float) $data['weight']);
+        if ($data['max_score'] < 1) {
+            return response()->json(['message' => 'Assessment weight must be at least 1'], 422);
+        }
 
         DB::transaction(function() use ($assessment, $data) {
             $assessment->update($data);

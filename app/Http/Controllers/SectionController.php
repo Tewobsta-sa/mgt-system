@@ -11,9 +11,19 @@ use Illuminate\Http\Request;
 class SectionController extends Controller
 {
     // List all sections with their program types
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(Section::with('programType')->get());
+        $query = Section::with('programType');
+
+        if ($request->has('search')) {
+            $query->where('name', 'like', '%' . $request->search . '%');
+        }
+
+        if ($request->has('program_type_id')) {
+            $query->where('program_type_id', $request->program_type_id);
+        }
+
+        return response()->json($query->paginate(15));
     }
 
     // Create a new section

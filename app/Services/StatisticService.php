@@ -18,10 +18,14 @@ class StatisticService
         $stats = [];
 
         // 1. Basic Counts
-        $stats['total_students'] = Student::where('program_type_id', 2)->count(); // Young
-        $stats['verified_students'] = Student::where('program_type_id', 2)->where('is_verified', true)->count();
+        $stats['total_students'] = Student::whereHas('section', fn($q) => $q->where('program_type_id', 2))->count();
+        $stats['verified_students'] = Student::whereHas('section', fn($q) => $q->where('program_type_id', 2))
+            ->where('is_verified', true)
+            ->count();
         $stats['pending_verification'] = $stats['total_students'] - $stats['verified_students'];
-        $stats['mezmur_members'] = MezmurStudent::count();
+        $stats['mezmur_members'] = Student::whereHas('section', fn($q) => $q->where('program_type_id', 2))
+            ->where('is_mezmur', true)
+            ->count();
         $stats['active_sections'] = Section::where('program_type_id', 2)->count();
 
         // 2. Attendance Trend (Last 7 days)

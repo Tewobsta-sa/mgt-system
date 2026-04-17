@@ -8,12 +8,18 @@ use App\Models\Assessment;
 use App\Models\Student;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 
 class GradeController extends Controller
 {
     // POST /api/grades
     public function store(Request $request)
     {
+        $user = Auth::user();
+        if (!$user || !($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
+            return response()->json(['message' => 'Forbidden: You can only view grades with your role.'], 403);
+        }
+
         $data = $request->validate([
             'assessment_id' => 'required|exists:assessments,id',
             'student_id'    => 'required|exists:students,id',
@@ -63,6 +69,11 @@ class GradeController extends Controller
     // DELETE /api/grades/{id}
     public function destroy($id)
     {
+        $user = Auth::user();
+        if (!$user || !($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
+            return response()->json(['message' => 'Forbidden: You can only view grades with your role.'], 403);
+        }
+
         $grade = Grade::findOrFail($id);
         $grade->delete();
         return response()->json(null, 204);

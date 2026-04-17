@@ -34,6 +34,14 @@ class StudentController extends Controller
         $query = Student::with(['address', 'contacts', 'section.programType'])
             ->whereHas('section.programType', fn($q) => $q->where('name', $type));
 
+        if ($sectionId = $request->query('section_id')) {
+            $query->where('section_id', $sectionId);
+        }
+
+        if ($request->has('is_mezmur')) {
+            $query->where('is_mezmur', $request->query('is_mezmur'));
+        }
+
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%$search%")
@@ -97,25 +105,28 @@ class StudentController extends Controller
 
     public function storeRegular(Request $request)
     {
-        $section_id = $this->resolveSection($request->input('section_name'), 'Regular');
+        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Regular');
         return $this->registerRegularStudent($request, $section_id);
     }
 
     public function storeYoung(Request $request)
     {
-        $section_id = $this->resolveSection($request->input('section_name'), 'Young');
+        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Young');
         return $this->registerYoungStudent($request, $section_id);
     }
 
     public function storeDistance(Request $request)
     {
-        $section_id = $this->resolveSection($request->input('section_name'), 'Distance');
+        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Distance');
         return $this->registerDistanceStudent($request, $section_id);
     }
 
-    // Section name to ID + validation helper
-    private function resolveSection(string $sectionName, string $programTypeName): int
+    // Section resolve helper
+    private function resolveSection(?string $sectionName, string $programTypeName): int
     {
+        if (!$sectionName) {
+            abort(422, "Section identifier required");
+        }
         $section = Section::with('programType')
             ->where('name', $sectionName)
             ->first();
@@ -136,9 +147,9 @@ class StudentController extends Controller
     {
         $request->validate([
             'name' => 'required|string|max:255',
-            'christian_name' => 'required|string|max:255',
-            'age' => 'required|integer|min:1',
-            'educational_level' => 'required|string|max:255',
+            'christian_name' => 'nullable|string|max:255',
+            'age' => 'nullable|integer|min:1',
+            'educational_level' => 'nullable|string|max:255',
             'subcity' => 'required|string|max:255',
             'district' => 'required|string|max:255',
             'special_place' => 'nullable|string|max:255',
@@ -178,9 +189,9 @@ class StudentController extends Controller
     {
         $request->validate([
             'name' => 'required|string|max:255',
-            'christian_name' => 'required|string|max:255',
-            'age' => 'required|integer|min:1',
-            'educational_level' => 'required|string|max:255',
+            'christian_name' => 'nullable|string|max:255',
+            'age' => 'nullable|integer|min:1',
+            'educational_level' => 'nullable|string|max:255',
             'subcity' => 'required|string|max:255',
             'district' => 'required|string|max:255',
             'special_place' => 'nullable|string|max:255',
@@ -208,7 +219,7 @@ class StudentController extends Controller
             $student->contacts()->create([
                 'name' => $request->parent_name,
                 'phone_number' => $request->parent_phone_number,
-                'relationship' => 'Parent',
+                'type' => 'Parent',
             ]);
 
             return response()->json($student->load('address', 'contacts'), 201);
@@ -280,7 +291,9 @@ class StudentController extends Controller
             'christian_name' => 'sometimes|nullable|string|max:255',
             'age' => 'sometimes|required|integer|min:1',
             'phone_number' => 'sometimes|required|string|max:20',
-            'section_name' => 'sometimes|required|string',
+            'phone_number' => 'sometimes|required|string|max:20',
+            'section_id' => 'sometimes|required|exists:sections,id',
+            'section_name' => 'sometimes|required_without:section_id|string',
         ];
 
         if ($type === 'Regular' || $type === 'Young') {
@@ -314,8 +327,10 @@ class StudentController extends Controller
 
         $request->validate($rules);
 
-        // If section_name is provided, resolve and update section_id
-        if ($request->has('section_name')) {
+        // If section_id or section_name is provided, resolve and update section_id
+        if ($request->has('section_id')) {
+            $student->section_id = $request->input('section_id');
+        } elseif ($request->has('section_name')) {
             $section_id = $this->resolveSection($request->input('section_name'), $type);
             $student->section_id = $section_id;
         }
@@ -351,7 +366,7 @@ class StudentController extends Controller
                 $student->contacts()->create([
                     'name' => $request->input('parent_name'),
                     'phone_number' => $request->input('parent_phone_number'),
-                    'relationship' => 'Parent',
+                    'type' => 'Parent',
                 ]);
             }
         }

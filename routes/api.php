@@ -21,10 +21,22 @@ use App\Http\Controllers\StudentPromotionController;
 use App\Http\Controllers\SystemInitializationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\Auth\RegisteredUserController;
 
 // System initialization routes (no authentication required)
-// ... (lines 24-40) ...
-    Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
+Route::get('/system/status', [SystemInitializationController::class, 'checkStatus']);
+Route::post('/system/initialize', [SystemInitializationController::class, 'initialize']);
+Route::get('/system/roles', [SystemInitializationController::class, 'getAvailableRoles']);
+
+Route::post('/login', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'store'])->name('login');
+Route::post('/refresh', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'refresh'])->name('refresh');
+Route::post('/forgot-password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'forgotPassword']);
+
+Route::middleware('auth:sanctum')->get('/whoami', function () {
+    return response()->json(Auth::user());
+});
+
+Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
 
     Route::post('/logout', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'destroy']);// Logout route
     Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update 
@@ -84,7 +96,7 @@ use App\Http\Controllers\ReportController;
         Route::post('promote/young', [StudentPromotionController::class, 'promoteYoung']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ":super_admin|distance_admin|tmhrt_office_admin"])->group(function () {
         Route::post('promote/distance', [StudentPromotionController::class, 'promoteDistance']);
     });
 
@@ -93,20 +105,50 @@ use App\Http\Controllers\ReportController;
     Route::get('/program-types/{id}/courses', [ProgramTypeController::class, 'courses']);
     Route::get('/program-types/{id}/teachers', [ProgramTypeController::class, 'teachers']);
     Route::get('/program-types/{id}/students', [ProgramTypeController::class, 'students']);
+    
+    // Read-only access to these resources for all authenticated admins/teachers
+    Route::get('program-types', [ProgramTypeController::class, 'index']);
+    Route::get('program-types/{program_type}', [ProgramTypeController::class, 'show']);
+    Route::get('sections', [SectionController::class, 'index']);
+    Route::get('sections/{section}', [SectionController::class, 'show']);
+    Route::get('courses', [CourseController::class, 'index']);
+    Route::get('courses/{course}', [CourseController::class, 'show']);
+
     Route::get('sections/{id}/courses', [SectionController::class, 'courses']);
     Route::get('sections/{id}/students', [SectionController::class, 'students']);
     Route::get('sections/{id}/teachers', [SectionController::class, 'teachers']);
     Route::get('schedule', [AssignmentController::class, 'schedule']);
     Route::get('attendance', [AttendanceController::class, 'getAttendance']);
 
-    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin'])->group(function () {
-        Route::apiResource('program-types', ProgramTypeController::class);
-        Route::apiResource('sections', SectionController::class);
+    Route::middleware([RoleMiddleware::class . ":super_admin|distance_admin|tmhrt_office_admin"])->group(function () {
+        Route::post('program-types', [ProgramTypeController::class, 'store']);
+        Route::put('program-types/{program_type}', [ProgramTypeController::class, 'update']);
+        Route::delete('program-types/{program_type}', [ProgramTypeController::class, 'destroy']);
+
+        Route::post('sections', [SectionController::class, 'store']);
+        Route::put('sections/{section}', [SectionController::class, 'update']);
+        Route::delete('sections/{section}', [SectionController::class, 'destroy']);
         Route::post('sections/{id}/assign-course', [SectionController::class, 'assignCourse']);
-        Route::apiResource('courses', CourseController::class);
+
+        Route::post('courses', [CourseController::class, 'store']);
+        Route::put('courses/{course}', [CourseController::class, 'update']);
+        Route::delete('courses/{course}', [CourseController::class, 'destroy']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':distance_admin|tmhrt_office_admin|teacher'])->group(function () {
+    // Teachers Read Access (Super Admin + Tmhrt Admin)
+    Route::middleware([RoleMiddleware::class . ':super_admin|tmhrt_office_admin'])->group(function () {
+        Route::get('teachers', [RegisteredUserController::class, 'index']);
+        Route::get('teachers/{id}', [RegisteredUserController::class, 'show']);
+    });
+
+    // Teachers Write Access (ONLY Tmhrt Admin)
+    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin'])->group(function () {
+        Route::post('teachers', [RegisteredUserController::class, 'store']);
+        Route::put('teachers/{id}', [RegisteredUserController::class, 'adminUpdate']);
+        Route::delete('teachers/{id}', [RegisteredUserController::class, 'destroy']);
+    });
+
+    Route::middleware([RoleMiddleware::class . ':super_admin|distance_admin|tmhrt_office_admin|teacher'])->group(function () {
         Route::apiResource('assessments', AssessmentController::class);
         Route::get('grades', [GradeController::class, 'index']);
         Route::post('grades', [GradeController::class, 'store']);
@@ -141,7 +183,7 @@ use App\Http\Controllers\ReportController;
         Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
         Route::apiResource('assignments', AssignmentController::class);
         Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
     });
