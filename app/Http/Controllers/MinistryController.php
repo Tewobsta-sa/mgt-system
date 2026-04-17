@@ -17,7 +17,7 @@ class MinistryController extends Controller
         $user = Auth::user();
         if (!$user) abort(401, 'Unauthorized');
 
-        if (!($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator'))) {
+        if (!($user->hasRole('mezmur_office_admin') || $user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin'))) {
             abort(403, 'Forbidden: Mezmur office role required.');
         }
 

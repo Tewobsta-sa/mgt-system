@@ -12,18 +12,17 @@ class ReportController extends Controller
 {
     public function export(Request $request, $type)
     {
-        switch ($type) {
-            case 'students':
-                return $this->exportStudents($request);
-            case 'grades':
-                return $this->exportGrades($request);
-            case 'attendance':
-                return $this->exportAttendance($request);
-            default:
-                return response()->json(['message' => 'Invalid report type'], 400);
-        }
+        return match ($type) {
+            'students' => $this->exportStudents($request),
+            'grades' => $this->exportGrades($request),
+            'attendance' => $this->exportAttendance($request),
+            default => response()->json(['message' => 'Invalid report type'], 400),
+        };
     }
 
+    /* -----------------------------------------
+     * STUDENTS EXPORT (FIXED)
+     * ----------------------------------------- */
     private function exportStudents(Request $request)
     {
         $headers = [
@@ -31,11 +30,20 @@ class ReportController extends Controller
             'Content-Disposition' => 'attachment; filename="students_report.csv"',
         ];
 
-        $students = Student::with('section')->where('program_type_id', 2)->get();
+        // FIX: removed program_type_id filter (doesn't exist)
+        $students = Student::with(['section'])->get();
 
         $callback = function () use ($students) {
             $file = fopen('php://output', 'w');
-            fputcsv($file, ['ID', 'Name', 'Student ID', 'Section', 'Verified', 'Birth Date']);
+
+            fputcsv($file, [
+                'ID',
+                'Name',
+                'Student ID',
+                'Section',
+                'Verified',
+                'Birth Date'
+            ]);
 
             foreach ($students as $student) {
                 fputcsv($file, [
@@ -44,43 +52,109 @@ class ReportController extends Controller
                     $student->student_id,
                     $student->section->name ?? 'N/A',
                     $student->is_verified ? 'Yes' : 'No',
-                    $student->birth_date
+                    $student->birth_date ?? 'N/A'
                 ]);
             }
+
             fclose($file);
         };
 
         return Response::stream($callback, 200, $headers);
     }
 
+    /* -----------------------------------------
+     * GRADES EXPORT (FIXED SAFETY)
+     * ----------------------------------------- */
     private function exportGrades(Request $request)
-    {
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="grades_report.csv"',
-        ];
+{
+    $headers = [
+        'Content-Type' => 'text/csv',
+        'Content-Disposition' => 'attachment; filename="academic_report_cards.csv"',
+    ];
 
-        $grades = Grade::with(['student', 'assessment.course'])->get();
+    $students = Student::with([
+        'grades.assessment.course'
+    ])->get();
 
-        $callback = function () use ($grades) {
-            $file = fopen('php://output', 'w');
-            fputcsv($file, ['Student', 'Course', 'Assessment', 'Score', 'Total']);
+    $callback = function () use ($students) {
+        $file = fopen('php://output', 'w');
 
-            foreach ($grades as $grade) {
-                fputcsv($file, [
-                    $grade->student->name ?? 'Unknown',
-                    $grade->assessment->course->name ?? 'Unknown',
-                    $grade->assessment->name ?? 'Unknown',
-                    $grade->score,
-                    $grade->assessment->max_score ?? 100
-                ]);
+        foreach ($students as $student) {
+
+            fputcsv($file, []);
+            fputcsv($file, [$student->name]);
+            fputcsv($file, []); // spacing
+
+            // GROUP GRADES BY COURSE
+            $courses = [];
+
+            foreach ($student->grades as $grade) {
+                $course = $grade->assessment->course;
+
+                if (!$course) continue;
+
+                $courseId = $course->id;
+
+                if (!isset($courses[$courseId])) {
+                    $courses[$courseId] = [
+                        'course_name' => $course->name,
+                        'assessments' => [],
+                        'total_weighted' => 0,
+                        'total_max' => 0,
+                    ];
+                }
+
+                $courses[$courseId]['assessments'][] = [
+                    'title' => $grade->assessment->title,
+                    'score' => $grade->score ?? 0,
+                    'max' => $grade->assessment->max_score ?? 100,
+                ];
+
+                $courses[$courseId]['total_weighted'] += ($grade->score ?? 0);
+                $courses[$courseId]['total_max'] += ($grade->assessment->max_score ?? 100);
             }
-            fclose($file);
-        };
 
-        return Response::stream($callback, 200, $headers);
-    }
+            foreach ($courses as $course) {
 
+                // COURSE TITLE
+                fputcsv($file, [$course['course_name']]);
+
+                // HEADER ROW (dynamic)
+                $header = array_map(
+                    fn($a) => $a['title'],
+                    $course['assessments']
+                );
+                $header[] = 'TOTAL';
+
+                fputcsv($file, $header);
+
+                // SCORE ROW
+                $scores = array_map(
+                    fn($a) => $a['score'],
+                    $course['assessments']
+                );
+
+                $total = $course['total_max'] > 0
+                    ? round(($course['total_weighted'] / $course['total_max']) * 100, 2)
+                    : 0;
+
+                $scores[] = $total . '%';
+
+                fputcsv($file, $scores);
+
+                fputcsv($file, []); // spacing between courses
+            }
+        }
+
+        fclose($file);
+    };
+
+    return Response::stream($callback, 200, $headers);
+}
+
+    /* -----------------------------------------
+     * ATTENDANCE EXPORT (SAFE)
+     * ----------------------------------------- */
     private function exportAttendance(Request $request)
     {
         $headers = [
@@ -88,20 +162,30 @@ class ReportController extends Controller
             'Content-Disposition' => 'attachment; filename="attendance_report.csv"',
         ];
 
-        $attendance = Attendance::with(['student', 'assignment'])->get();
+        $attendance = Attendance::with([
+            'student',
+            'assignment'
+        ])->get();
 
         $callback = function () use ($attendance) {
             $file = fopen('php://output', 'w');
-            fputcsv($file, ['Date', 'Student', 'Assignment', 'Status']);
+
+            fputcsv($file, [
+                'Date',
+                'Student',
+                'Assignment',
+                'Status'
+            ]);
 
             foreach ($attendance as $record) {
                 fputcsv($file, [
-                    $record->marked_at,
+                    $record->marked_at ?? 'N/A',
                     $record->student->name ?? 'Unknown',
                     $record->assignment->type ?? 'Unknown',
-                    $record->status
+                    $record->status ?? 'Unknown'
                 ]);
             }
+
             fclose($file);
         };
 
