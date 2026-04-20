@@ -62,6 +62,13 @@ class AssignmentController extends Controller
             $query->where('type', 'Course');
         } elseif ($user->hasRole('mezmur_office_admin')) {
             $query->where('type', 'MezmurTraining');
+        } elseif ($user->hasRole('teacher')) {
+            // Teachers see only course assignments they are attached to
+            $query->where('type', 'Course')
+                ->where(function ($q) use ($user) {
+                    $q->where('user_id', $user->id)
+                      ->orWhereHas('assignmentCourses', fn ($qq) => $qq->where('teacher_id', $user->id));
+                });
         } else {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -96,8 +103,15 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if ($assignment->type === 'Course') {
+            $isOfficeAdmin = $user->hasRole('tmhrt_office_admin');
+            $isAssignedTeacher = $user->hasRole('teacher') && (
+                $assignment->user_id === $user->id ||
+                $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists()
+            );
+            if (! $isOfficeAdmin && ! $isAssignedTeacher) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
         }
         if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
