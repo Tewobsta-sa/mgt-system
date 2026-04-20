@@ -24,13 +24,22 @@ class AttendanceController extends Controller
         ]);
 
         $assignment = Assignment::with('section')->findOrFail($validated['assignment_id']);
+        if ($user->hasRole('teacher')) {
+            $isOwnAssignment = $assignment->assignmentCourses()
+                ->where('teacher_id', $user->id)
+                ->exists();
+
+            if (!$isOwnAssignment) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+        }
         $student = Student::with('section')->findOrFail($validated['student_id']);
 
         if ($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_office_coordinator')) {
             if ($assignment->type !== 'MezmurTraining') {
                 return response()->json(['message' => 'Forbidden: You can only mark attendance for MezmurTraining assignments.'], 403);
             }
-        } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_office_coordinator')) {
+        } elseif ($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher')) {
             if ($assignment->type !== 'Course') {
                 return response()->json(['message' => 'Forbidden: You can only mark attendance for Course assignments.'], 403);
             }
@@ -110,10 +119,11 @@ class AttendanceController extends Controller
                 $q->where('type', 'MezmurTraining');
             });
         } elseif ($user->hasRole('teacher')) {
-            $query->whereHas('assignment', function ($q) {
-                $q->where('type', 'Course');
+            $query->whereHas('assignment.assignmentCourses', function ($q) use ($user) {
+                $q->where('teacher_id', $user->id);
             });
-        } else {
+        }
+        else {
             return response()->json(['message' => 'Forbidden: Your role cannot view attendance.'], 403);
         }
 

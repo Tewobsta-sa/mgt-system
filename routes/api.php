@@ -89,7 +89,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
 
     });
 
-    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin|gngnunet_office_admin|super_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':tmhrt_office_admin|gngnunet_office_admin|super_admin|'])->group(function () {
         Route::post('students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
         Route::post('students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
         Route::post('promote/regular', [StudentPromotionController::class, 'promoteRegular']);
@@ -183,7 +183,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|teacher'])->group(function () {
         Route::apiResource('assignments', AssignmentController::class);
         Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
     });

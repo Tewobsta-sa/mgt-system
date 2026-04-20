@@ -17,7 +17,7 @@ class AssessmentController extends Controller
 
         if ($request->filled('course_id')) {
             $query->where('course_id', $request->query('course_id'));
-        }
+        } 
 
         if ($request->filled('search')) {
             $s = $request->search;

@@ -14,41 +14,67 @@ class GradeController extends Controller
 {
     // POST /api/grades
     public function store(Request $request)
-    {
-        $user = Auth::user();
-        if (!$user || !($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
-            return response()->json(['message' => 'Forbidden: You can only view grades with your role.'], 403);
-        }
+{
+    $user = Auth::user();
 
-        $data = $request->validate([
-            'assessment_id' => 'required|exists:assessments,id',
-            'student_id'    => 'required|exists:students,id',
-            'score'         => 'required|numeric|min:0'
-        ]);
-
-        $assessment = Assessment::findOrFail($data['assessment_id']);
-
-        if ($data['score'] > $assessment->max_score) {
-            return response()->json(['message' => 'Score cannot be greater than assessment max_score'], 422);
-        }
-
-        $grade = null;
-        DB::transaction(function() use ($data, &$grade) {
-            $grade = Grade::updateOrCreate(
-                ['assessment_id' => $data['assessment_id'], 'student_id' => $data['student_id']],
-                ['score' => $data['score']]
-            );
-        });
-
-        // return grade + recalculated totals for convenience
-        $courseTotals = $this->calculateCourseTotalsForStudent($data['student_id'], $assessment->course_id);
-
-        return response()->json([
-            'grade' => $grade,
-            'course_total' => $courseTotals['course_total'],
-            'course_percentage' => $courseTotals['course_percentage']
-        ], 201);
+    if (!$user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
     }
+
+    if (!($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
+        return response()->json(['message' => 'Forbidden'], 403);
+    }
+
+    $data = $request->validate([
+        'assessment_id' => 'required|exists:assessments,id',
+        'student_id'    => 'required|exists:students,id',
+        'score'         => 'required|numeric|min:0'
+    ]);
+
+    $assessment = Assessment::findOrFail($data['assessment_id']);
+
+    // 🔒 Teacher can only grade own course
+    if ($user->hasRole('teacher')) {
+        $teacherCourseIds = \App\Models\AssignmentCourse::where('teacher_id', $user->id)
+            ->pluck('course_id')
+            ->toArray();
+
+        if (!in_array($assessment->course_id, $teacherCourseIds)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+    }
+
+    if ($data['score'] > $assessment->max_score) {
+        return response()->json([
+            'message' => 'Score cannot be greater than assessment max_score'
+        ], 422);
+    }
+
+    $grade = null;
+
+    DB::transaction(function () use ($data, &$grade) {
+        $grade = Grade::updateOrCreate(
+            [
+                'assessment_id' => $data['assessment_id'],
+                'student_id' => $data['student_id']
+            ],
+            [
+                'score' => $data['score']
+            ]
+        );
+    });
+
+    $courseTotals = $this->calculateCourseTotalsForStudent(
+        $data['student_id'],
+        $assessment->course_id
+    );
+
+    return response()->json([
+        'grade' => $grade,
+        'course_total' => $courseTotals['course_total'],
+        'course_percentage' => $courseTotals['course_percentage']
+    ], 201);
+}
 
     // Optional: GET /api/grades?student_id= &assessment_id=
     public function index(Request $request)
@@ -123,25 +149,42 @@ class GradeController extends Controller
 
 public function gradesForCourse($courseId)
 {
-    $course = \App\Models\Course::with(['assessments.grades.student'])->findOrFail($courseId);
+    $user = Auth::user();
+
+    if (!$user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    $course = \App\Models\Course::with([
+        'assessments.grades.student'
+    ])->findOrFail($courseId);
+
+    // 🔒 SECURITY: restrict teacher access
+    if ($user->hasRole('teacher')) {
+        $teacherCourseIds = \App\Models\AssignmentCourse::where('teacher_id', $user->id)
+            ->pluck('course_id')
+            ->toArray();
+
+        if (!in_array($courseId, $teacherCourseIds)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+    }
 
     $results = [];
 
     foreach ($course->assessments as $assessment) {
         $gradesData = [];
+
         foreach ($assessment->grades as $grade) {
             $gradesData[] = [
                 'student_id' => $grade->student->id,
-                'student_name' => $grade->student->name,
                 'score' => $grade->score,
             ];
         }
 
         $results[] = [
             'assessment_id' => $assessment->id,
-            'assessment_title' => $assessment->title,
-            'max_score' => $assessment->max_score,
-            'weight' => $assessment->weight,
+            'assessment_title' => $assessment->title ?? $assessment->name,
             'grades' => $gradesData,
         ];
     }

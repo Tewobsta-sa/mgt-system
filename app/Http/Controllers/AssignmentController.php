@@ -65,6 +65,10 @@ class AssignmentController extends Controller
             $query->where('type', 'Course');
         } elseif ($user->hasRole('mezmur_office_admin')) {
             $query->where('type', 'MezmurTraining');
+        } elseif ($user->hasRole('teacher')) {
+            $query->whereHas('assignmentCourses', function ($q) use ($user) {
+                $q->where('teacher_id', $user->id);
+            });
         } else {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -99,8 +103,23 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if ($assignment->type === 'Course') {
+            if (
+                !$user->hasRole('tmhrt_office_admin') &&
+                !$user->hasRole('super_admin')
+            ) {
+                if ($user->hasRole('teacher')) {
+                    $isOwn = $assignment->assignmentCourses()
+                        ->where('teacher_id', $user->id)
+                        ->exists();
+
+                    if (!$isOwn) {
+                        return response()->json(['message' => 'Forbidden'], 403);
+                    }
+                } else {
+                    return response()->json(['message' => 'Forbidden'], 403);
+                }
+            }
         }
         if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
             return response()->json(['message' => 'Forbidden'], 403);
@@ -586,6 +605,11 @@ class AssignmentController extends Controller
             $query->where('day_of_week', $dayOfWeek);
         }
 
+        if ($user->hasRole('teacher')) {
+            $query->whereHas('assignmentCourses', function ($q) use ($user) {
+                $q->where('teacher_id', $user->id);
+            });
+        }
         $schedule = $query->orderBy('day_of_week')->orderBy('start_time')->get();
 
         return response()->json($schedule);
