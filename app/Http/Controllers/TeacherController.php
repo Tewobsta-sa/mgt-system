@@ -87,7 +87,7 @@ class TeacherController extends Controller
 
         if ($user->hasRole('teacher')) {
             $teacherSectionIds = Assignment::where('type', 'Course')
-                ->where(function ($q) use ($user) {
+                ->where(function ($q) use ($user, $course) {
                     $q->where('user_id', $user->id)
                       ->orWhereHas('assignmentCourses', fn ($qq) => $qq->where('teacher_id', $user->id)
                                                                       ->where('course_id', $course->id));
