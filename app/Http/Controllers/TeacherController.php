@@ -107,7 +107,10 @@ class TeacherController extends Controller
             $filterIds = $sectionIds->values()->all();
         }
 
-        $students = Student::with('section.programType')
+        $students = Student::with([
+                'section.programType',
+                'grades' => fn ($q) => $q->whereHas('assessment', fn ($qq) => $qq->where('course_id', $course->id)),
+            ])
             ->whereIn('section_id', $filterIds)
             ->orderBy('name')
             ->get();
