@@ -17,13 +17,13 @@ class StudentImportController extends Controller
 
     private const HEADER_MAP = [
         self::TRACK_REGULAR => [
-            'name', 'christian_name', 'age', 'educational_level',
+            'name', 'christian_name', 'age', 'sex', 'educational_level',
             'subcity', 'district', 'special_place', 'house_number',
             'phone_number', 'emergency_responder', 'emergency_responder_phone_number',
             'section_name',
         ],
         self::TRACK_YOUNG => [
-            'name', 'christian_name', 'age', 'educational_level',
+            'name', 'christian_name', 'age', 'sex', 'educational_level',
             'subcity', 'district', 'special_place', 'house_number',
             'phone_number', 'parent_name', 'parent_phone_number',
             'section_name',
@@ -128,6 +128,7 @@ class StudentImportController extends Controller
                     'name'              => $payload['name'],
                     'christian_name'    => $payload['christian_name'] ?? null,
                     'age'               => isset($payload['age']) ? (int) $payload['age'] : null,
+                    'sex'               => $payload['sex'] ?? null,
                     'phone_number'      => $payload['phone_number'] ?? null,
                     'educational_level' => $payload['educational_level'] ?? null,
                     'section_id'        => $section->id,
@@ -203,6 +204,7 @@ class StudentImportController extends Controller
             'name'           => ['required', 'string', 'max:255'],
             'christian_name' => ['nullable', 'string', 'max:255'],
             'age'            => ['required', 'integer', 'min:1', 'max:120'],
+            'sex'            => ['required', 'in:Male,Female'],
             'phone_number'   => ['required', 'string', 'max:20'],
             'section_name'   => ['required', 'string', 'max:255'],
         ];
@@ -226,7 +228,6 @@ class StudentImportController extends Controller
         }
 
         if ($programType === self::TRACK_DISTANCE) {
-            $rules['sex']                = ['required', 'in:Male,Female'];
             $rules['email_address']      = ['nullable', 'email', 'max:255'];
             $rules['telegram_user_name'] = ['nullable', 'string', 'max:255'];
             $rules['round']              = ['required', 'string', 'max:10'];
