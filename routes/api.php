@@ -18,10 +18,12 @@ use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\GradeController;
 use App\Http\Controllers\StudentGradeController;
 use App\Http\Controllers\StudentPromotionController;
+use App\Http\Controllers\StudentImportController;
 use App\Http\Controllers\SystemInitializationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\TeacherController;
 
 // System initialization routes (no authentication required)
 Route::get('/system/status', [SystemInitializationController::class, 'checkStatus']);
@@ -71,11 +73,15 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
             Route::post('regular', [StudentController::class, 'storeRegular']);
             Route::put('regular/{id}', [StudentController::class, 'updateRegular']);
             Route::delete('regular/{id}', [StudentController::class, 'destroyRegular']);
-        });    
+            Route::get('import/template/regular', [StudentImportController::class, 'template'])->defaults('track', 'Regular');
+            Route::post('import/regular', [StudentImportController::class, 'import'])->defaults('track', 'Regular');
+        });
         Route::middleware([RoleMiddleware::class . ':gngnunet_office_admin|young_gngnunet_admin'])->group(function () {
             Route::post('young', [StudentController::class, 'storeYoung']);
             Route::put('young/{id}', [StudentController::class, 'updateYoung']);
             Route::delete('young/{id}', [StudentController::class, 'destroyYoung']);
+            Route::get('import/template/young', [StudentImportController::class, 'template'])->defaults('track', 'Young');
+            Route::post('import/young', [StudentImportController::class, 'import'])->defaults('track', 'Young');
         });
         Route::middleware([RoleMiddleware::class . ':super_admin|distance_admin'])->group(function () {
             Route::get('distance', [StudentController::class, 'indexDistance']);
@@ -85,6 +91,8 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
             Route::post('distance', [StudentController::class, 'storeDistance']);
             Route::put('distance/{id}', [StudentController::class, 'updateDistance']);
             Route::delete('distance/{id}', [StudentController::class, 'destroyDistance']);
+            Route::get('import/template/distance', [StudentImportController::class, 'template'])->defaults('track', 'Distance');
+            Route::post('import/distance', [StudentImportController::class, 'import'])->defaults('track', 'Distance');
         });
 
     });
@@ -152,11 +160,16 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::apiResource('assessments', AssessmentController::class);
         Route::get('grades', [GradeController::class, 'index']);
         Route::post('grades', [GradeController::class, 'store']);
+        Route::post('grades/bulk', [GradeController::class, 'bulkStore']);
         Route::delete('grades/{id}', [GradeController::class, 'destroy']);
 
         Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
         Route::get('sections/{id}/rankings', [StudentGradeController::class, 'sectionRankings']);
         Route::get('courses/{courseId}/grades', [GradeController::class, 'gradesForCourse']);
+        Route::get('courses/{course}/assessments', [CourseController::class, 'assessments']);
+        Route::get('courses/{courseId}/students', [TeacherController::class, 'courseStudents']);
+
+        Route::get('teacher/my-courses', [TeacherController::class, 'myCourses']);
     });
 
 
@@ -183,8 +196,18 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::post('/ministry-assignments/{id}/auto-assign', [MinistryController::class, 'rerunAutoAssign']);
     });
 
-    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|teacher'])->group(function () {
-        Route::apiResource('assignments', AssignmentController::class);
+    // Read (teachers + admins)
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin|teacher'])->group(function () {
+        Route::get('assignments', [AssignmentController::class, 'index']);
+        Route::get('assignments/{assignment}', [AssignmentController::class, 'show']);
+    });
+
+    // Write (admins only)
+    Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_office_admin|tmhrt_office_admin|distance_admin'])->group(function () {
+        Route::post('assignments', [AssignmentController::class, 'store']);
+        Route::put('assignments/{assignment}', [AssignmentController::class, 'update']);
+        Route::patch('assignments/{assignment}', [AssignmentController::class, 'update']);
+        Route::delete('assignments/{assignment}', [AssignmentController::class, 'destroy']);
         Route::post('attendance/mark', [AttendanceController::class, 'markAttendance']);
     });
 });
