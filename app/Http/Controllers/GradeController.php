@@ -12,6 +12,93 @@ use Illuminate\Support\Facades\Auth;
 
 class GradeController extends Controller
 {
+    /**
+     * POST /api/grades/bulk
+     * Save many grades in one request. Accepts:
+     *   { course_id?: int, grades: [ { assessment_id, student_id, score|null } ] }
+     * Returns per-student course totals for convenience.
+     */
+    public function bulkStore(Request $request)
+    {
+        $data = $request->validate([
+            'grades'                => 'required|array|min:1',
+            'grades.*.assessment_id' => 'required|exists:assessments,id',
+            'grades.*.student_id'    => 'required|exists:students,id',
+            'grades.*.score'         => 'nullable|numeric|min:0',
+        ]);
+
+        $saved = [];
+        $errors = [];
+
+        DB::transaction(function () use ($data, &$saved, &$errors) {
+            $assessmentCache = [];
+
+            foreach ($data['grades'] as $i => $row) {
+                $assessment = $assessmentCache[$row['assessment_id']]
+                    ?? ($assessmentCache[$row['assessment_id']] = Assessment::find($row['assessment_id']));
+
+                if (! $assessment) {
+                    $errors[] = ['index' => $i, 'message' => 'Assessment not found'];
+                    continue;
+                }
+
+                if ($row['score'] === null || $row['score'] === '') {
+                    // Empty score => remove any existing grade (teacher clearing a cell)
+                    Grade::where('assessment_id', $row['assessment_id'])
+                        ->where('student_id', $row['student_id'])
+                        ->delete();
+                    continue;
+                }
+
+                if ((float) $row['score'] > (float) $assessment->max_score) {
+                    $errors[] = [
+                        'index'   => $i,
+                        'message' => "Score {$row['score']} exceeds max {$assessment->max_score} for '{$assessment->title}'",
+                    ];
+                    continue;
+                }
+
+                $grade = Grade::updateOrCreate(
+                    ['assessment_id' => $row['assessment_id'], 'student_id' => $row['student_id']],
+                    ['score' => $row['score']]
+                );
+
+                $saved[] = $grade;
+            }
+        });
+
+        if (! empty($errors)) {
+            return response()->json([
+                'message' => 'Some rows failed validation',
+                'saved_count' => count($saved),
+                'errors' => $errors,
+            ], 422);
+        }
+
+        // Compute per-(student,course) totals for the affected rows
+        $totals = [];
+        $byPair = [];
+        foreach ($saved as $g) {
+            $courseId = Assessment::find($g->assessment_id)->course_id;
+            $key = $g->student_id . ':' . $courseId;
+            if (! isset($byPair[$key])) {
+                $byPair[$key] = true;
+                $t = $this->calculateCourseTotalsForStudent($g->student_id, $courseId);
+                $totals[] = [
+                    'student_id'        => $g->student_id,
+                    'course_id'         => $courseId,
+                    'course_total'      => $t['course_total'],
+                    'course_percentage' => $t['course_percentage'],
+                ];
+            }
+        }
+
+        return response()->json([
+            'saved_count' => count($saved),
+            'totals'      => $totals,
+        ], 201);
+    }
+
     // POST /api/grades
     public function store(Request $request)
 {

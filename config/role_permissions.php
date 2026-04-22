@@ -17,5 +17,9 @@ return [
     'gngnunet_office_admin' => [
         'gngnunet_office_coordinator',
         'student'
-    ]
+    ],
+    // Generic instructor role used across program types. Controllers check
+    // hasRole('teacher') directly (see AssignmentController, GradeController,
+    // RegisteredUserController), so this role must exist after a fresh install.
+    'teacher' => [],
 ];
