@@ -41,7 +41,10 @@ Route::middleware('auth:sanctum')->get('/whoami', function () {
 Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
 
     Route::post('/logout', [App\Http\Controllers\Auth\AuthenticatedSessionController::class, 'destroy']);// Logout route
-    Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update 
+    Route::put('/user/update', [App\Http\Controllers\Auth\RegisteredUserController::class, 'update']); // Self-update
+    Route::post('/profile/info', [App\Http\Controllers\Auth\RegisteredUserController::class, 'profileInfo']);
+    Route::post('/profile/password', [App\Http\Controllers\Auth\RegisteredUserController::class, 'profilePassword']);
+    Route::post('/profile/security', [App\Http\Controllers\Auth\RegisteredUserController::class, 'profileSecurity']);
     Route::get('/dashboard/stats', [DashboardController::class, 'getStats']); // Analytics Dashboard
     Route::get('/reports/export/{type}', [ReportController::class, 'export']);
 
@@ -137,7 +140,10 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::put('sections/{section}', [SectionController::class, 'update']);
         Route::delete('sections/{section}', [SectionController::class, 'destroy']);
         Route::post('sections/{id}/assign-course', [SectionController::class, 'assignCourse']);
+    });
 
+    // Course CRUD: tmhrt_office_admin (ትምህርት ኽፍል) only, plus super_admin
+    Route::middleware([RoleMiddleware::class . ":super_admin|tmhrt_office_admin"])->group(function () {
         Route::post('courses', [CourseController::class, 'store']);
         Route::put('courses/{course}', [CourseController::class, 'update']);
         Route::delete('courses/{course}', [CourseController::class, 'destroy']);
@@ -162,6 +168,10 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::post('grades', [GradeController::class, 'store']);
         Route::post('grades/bulk', [GradeController::class, 'bulkStore']);
         Route::delete('grades/{id}', [GradeController::class, 'destroy']);
+
+        // Bulk grade import (XLSX/CSV)
+        Route::get('grades/import/template/{courseId}', [GradeController::class, 'importTemplate']);
+        Route::post('grades/import/{courseId}', [GradeController::class, 'importExcel']);
 
         Route::get('students/{id}/totals', [StudentGradeController::class, 'totals']);
         Route::get('sections/{id}/rankings', [StudentGradeController::class, 'sectionRankings']);

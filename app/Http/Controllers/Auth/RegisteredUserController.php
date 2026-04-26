@@ -31,6 +31,7 @@ class RegisteredUserController extends Controller
             $request->validate([
                 'name' => 'required|string|max:255',
                 'username' => 'required|string|unique:users',
+                'phone_number' => 'nullable|string|max:30',
                 'password' => 'required|string|min:8|confirmed',
                 'role' => 'required|string',
                 'security_question' => 'required|string|max:255',
@@ -67,6 +68,7 @@ class RegisteredUserController extends Controller
             $user = User::create([
                 'name' => $request->name,
                 'username' => $request->username,
+                'phone_number' => $request->phone_number,
                 'password' => Hash::make($request->password),
                 'security_question' => $request->security_question,
                 'security_answer' => Hash::make($request->security_answer),
@@ -155,6 +157,62 @@ class RegisteredUserController extends Controller
         return response()->json(['message' => 'Password reset successful'], 200);
     }
 
+    public function profileInfo(Request $request)
+    {
+        $user = User::findOrFail(Auth::id());
+
+        $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'username' => 'sometimes|string|unique:users,username,' . $user->id,
+            'phone_number' => 'sometimes|nullable|string|max:30',
+        ]);
+
+        $user->fill($request->only(['name', 'username', 'phone_number']));
+        $user->save();
+
+        return response()->json(['message' => 'Profile updated successfully', 'user' => $user], 200);
+    }
+
+    public function profilePassword(Request $request)
+    {
+        $user = User::findOrFail(Auth::id());
+
+        $request->validate([
+            'current_password' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json(['error' => 'Current password incorrect'], 403);
+        }
+
+        $user->password = Hash::make($request->password);
+        $user->save();
+
+        return response()->json(['message' => 'Password updated successfully'], 200);
+    }
+
+    public function profileSecurity(Request $request)
+    {
+        $user = User::findOrFail(Auth::id());
+
+        $request->validate([
+            'password' => 'required|string',
+            'security_question' => 'required|string|max:255',
+            'security_answer' => 'required|string|max:255',
+        ]);
+
+        if (!Hash::check($request->password, $user->password)) {
+            return response()->json(['error' => 'Current password incorrect'], 403);
+        }
+
+        $user->security_question = $request->security_question;
+        $user->security_answer = Hash::make($request->security_answer);
+        $user->save();
+
+        return response()->json(['message' => 'Security settings updated successfully'], 200);
+    }
+
     public function update(Request $request)
     {
         $user = User::findOrFail(Auth::id());
@@ -162,6 +220,7 @@ class RegisteredUserController extends Controller
         $request->validate([
             'name' => 'sometimes|string|max:255',
             'username' => 'sometimes|string|unique:users,username,' . $user->id,
+            'phone_number' => 'sometimes|nullable|string|max:30',
             'password' => 'nullable|string|min:8|confirmed',
             'current_password' => 'required_with:password',
             'security_question' => 'nullable|string|max:255',
@@ -177,7 +236,7 @@ class RegisteredUserController extends Controller
             $user->password = Hash::make($request->password);
         }
 
-        $user->fill($request->only(['name', 'username', 'security_question']));
+        $user->fill($request->only(['name', 'username', 'phone_number', 'security_question']));
 
         if ($request->filled('security_answer')) {
             $user->security_answer = Hash::make($request->security_answer);
@@ -218,6 +277,7 @@ class RegisteredUserController extends Controller
         $request->validate([
             'name' => 'sometimes|string|max:255',
             'username' => 'sometimes|string|unique:users,username,' . $user->id,
+            'phone_number' => 'sometimes|nullable|string|max:30',
             'password' => 'nullable|string|min:8|confirmed',
             'security_question' => 'nullable|string|max:255',
             'security_answer' => 'nullable|string|max:255',
@@ -225,7 +285,7 @@ class RegisteredUserController extends Controller
             'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
-        $user->fill($request->only(['name', 'username', 'security_question']));
+        $user->fill($request->only(['name', 'username', 'phone_number', 'security_question']));
 
         if ($request->filled('password')) {
             $user->password = Hash::make($request->password);
