@@ -261,7 +261,14 @@ public function importTemplate($courseId)
         }
     }
 
-    $sectionIds = AssignmentCourse::where('course_id', $course->id)->pluck('section_id')->unique()->values()->all();
+    $sectionIds = AssignmentCourse::where('course_id', $course->id)
+        ->with('assignment:id,section_id')
+        ->get()
+        ->pluck('assignment.section_id')
+        ->filter()
+        ->unique()
+        ->values()
+        ->all();
     $students = Student::whereIn('section_id', $sectionIds)->orderBy('name')->get();
 
     $headers = ['student_id', 'student_name'];
