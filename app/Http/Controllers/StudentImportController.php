@@ -155,13 +155,13 @@ class StudentImportController extends Controller
                         $student->contacts()->create([
                             'name'         => $payload['emergency_responder'],
                             'phone_number' => $payload['emergency_responder_phone_number'],
-                            'relationship' => 'Emergency Responder',
+                            'type'         => 'Emergency Responder',
                         ]);
                     } else {
                         $student->contacts()->create([
                             'name'         => $payload['parent_name'],
                             'phone_number' => $payload['parent_phone_number'],
-                            'relationship' => 'Parent',
+                            'type'         => 'Parent',
                         ]);
                     }
                 }

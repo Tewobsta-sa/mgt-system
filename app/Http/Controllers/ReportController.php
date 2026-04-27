@@ -169,20 +169,28 @@ class ReportController extends Controller
 
         $callback = function () use ($attendance) {
             $file = fopen('php://output', 'w');
+            // UTF-8 BOM so Excel renders Amharic and other unicode correctly.
+            fwrite($file, "\xEF\xBB\xBF");
 
             fputcsv($file, [
                 'Date',
+                'Time',
                 'Student',
                 'Assignment',
-                'Status'
+                'Status',
             ]);
 
             foreach ($attendance as $record) {
+                $markedAt = $record->marked_at
+                    ? \Carbon\Carbon::parse($record->marked_at)
+                    : null;
+
                 fputcsv($file, [
-                    $record->marked_at ?? 'N/A',
+                    $markedAt ? $markedAt->format('Y-m-d') : 'N/A',
+                    $markedAt ? $markedAt->format('h:i A') : 'N/A',
                     $record->student->name ?? 'Unknown',
                     $record->assignment->type ?? 'Unknown',
-                    $record->status ?? 'Unknown'
+                    $record->status ?? 'Unknown',
                 ]);
             }
 

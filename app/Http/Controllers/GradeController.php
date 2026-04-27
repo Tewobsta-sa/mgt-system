@@ -5,10 +5,15 @@ namespace App\Http\Controllers;
 
 use App\Models\Grade;
 use App\Models\Assessment;
+use App\Models\Course;
 use App\Models\Student;
+use App\Models\AssignmentCourse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Csv as CsvWriter;
 
 class GradeController extends Controller
 {
@@ -233,6 +238,193 @@ class GradeController extends Controller
     }
 
     // Add this method inside your GradeController class
+
+/**
+ * GET /api/grades/import/template/{courseId}
+ * Returns a CSV template with one row per (assessment) student pair the teacher can fill.
+ * Header columns: student_id, student_name, <assessment.title> (one per assessment).
+ */
+public function importTemplate($courseId)
+{
+    $user = Auth::user();
+    if (! $user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    $course = Course::with(['assessments' => fn ($q) => $q->orderBy('id')])
+        ->findOrFail($courseId);
+
+    if ($user->hasRole('teacher')) {
+        $teacherCourseIds = AssignmentCourse::where('teacher_id', $user->id)->pluck('course_id')->toArray();
+        if (! in_array((int) $courseId, $teacherCourseIds, true)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+    }
+
+    $sectionIds = AssignmentCourse::where('course_id', $course->id)
+        ->with('assignment:id,section_id')
+        ->get()
+        ->pluck('assignment.section_id')
+        ->filter()
+        ->unique()
+        ->values()
+        ->all();
+    $students = Student::whereIn('section_id', $sectionIds)->orderBy('name')->get();
+
+    $headers = ['student_id', 'student_name'];
+    foreach ($course->assessments as $a) {
+        $headers[] = $a->title . ' (max ' . $a->max_score . ')';
+    }
+
+    $spreadsheet = new Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+    $sheet->fromArray($headers, null, 'A1');
+
+    $rowIndex = 2;
+    foreach ($students as $s) {
+        $row = [$s->student_id, $s->name];
+        foreach ($course->assessments as $_a) {
+            $row[] = '';
+        }
+        $sheet->fromArray($row, null, 'A' . $rowIndex);
+        $rowIndex++;
+    }
+
+    $writer = new CsvWriter($spreadsheet);
+    $writer->setUseBOM(true);
+
+    $filename = 'grades_template_' . preg_replace('/\W+/', '_', strtolower($course->name)) . '.csv';
+
+    return response()->streamDownload(function () use ($writer) {
+        $writer->save('php://output');
+    }, $filename, [
+        'Content-Type' => 'text/csv; charset=UTF-8',
+    ]);
+}
+
+/**
+ * POST /api/grades/import/{courseId}
+ * Body: file=<xlsx|csv>
+ * Header row format: student_id, student_name, <assessment title 1>, <assessment title 2>, ...
+ * Validates each cell against assessment.max_score; rolls back the entire import on errors.
+ */
+public function importExcel(Request $request, $courseId)
+{
+    $user = Auth::user();
+    if (! $user) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    $request->validate([
+        'file' => 'required|file|mimes:xlsx,xls,csv,txt|max:5120',
+    ]);
+
+    $course = Course::with('assessments')->findOrFail($courseId);
+
+    if ($user->hasRole('teacher')) {
+        $teacherCourseIds = AssignmentCourse::where('teacher_id', $user->id)->pluck('course_id')->toArray();
+        if (! in_array((int) $courseId, $teacherCourseIds, true)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+    }
+
+    try {
+        $spreadsheet = IOFactory::load($request->file('file')->getRealPath());
+    } catch (\Throwable $e) {
+        return response()->json(['message' => 'Could not read file: ' . $e->getMessage()], 422);
+    }
+
+    $rows = $spreadsheet->getActiveSheet()->toArray(null, true, true, false);
+    if (count($rows) < 2) {
+        return response()->json(['message' => 'File is empty or missing data rows.'], 422);
+    }
+
+    $header = array_map(fn ($h) => trim((string) $h), $rows[0]);
+    if (count($header) < 3 || strcasecmp($header[0], 'student_id') !== 0) {
+        return response()->json([
+            'message' => 'First column must be student_id and at least one assessment column is required.',
+        ], 422);
+    }
+
+    // Map each header (>=3rd col) to an assessment by matching the title prefix.
+    $assessmentByCol = [];
+    for ($c = 2; $c < count($header); $c++) {
+        $cellHeader = $header[$c];
+        // Strip "(max NN)" suffix if present.
+        $title = trim(preg_replace('/\s*\(max\s+[\d.]+\)\s*$/i', '', $cellHeader));
+        $match = $course->assessments->first(fn ($a) => strcasecmp($a->title, $title) === 0);
+        if (! $match) {
+            return response()->json([
+                'message' => "Column '{$cellHeader}' does not match any assessment of this course.",
+            ], 422);
+        }
+        $assessmentByCol[$c] = $match;
+    }
+
+    $errors = [];
+    $savedCount = 0;
+
+    DB::beginTransaction();
+    try {
+        for ($r = 1; $r < count($rows); $r++) {
+            $row = $rows[$r];
+            $studentIdRaw = isset($row[0]) ? trim((string) $row[0]) : '';
+            if ($studentIdRaw === '') {
+                continue; // blank row
+            }
+
+            $student = Student::where('student_id', $studentIdRaw)->orWhere('id', $studentIdRaw)->first();
+            if (! $student) {
+                $errors[] = ['row' => $r + 1, 'message' => "Unknown student '{$studentIdRaw}'"];
+                continue;
+            }
+
+            foreach ($assessmentByCol as $colIdx => $assessment) {
+                $cell = $row[$colIdx] ?? null;
+                if ($cell === null || $cell === '') {
+                    continue; // skip empty cells
+                }
+                if (! is_numeric($cell)) {
+                    $errors[] = ['row' => $r + 1, 'message' => "Score for '{$assessment->title}' must be numeric"];
+                    continue;
+                }
+                $score = (float) $cell;
+                if ($score < 0 || $score > (float) $assessment->max_score) {
+                    $errors[] = [
+                        'row' => $r + 1,
+                        'message' => "Score {$score} for '{$assessment->title}' is out of range (0..{$assessment->max_score})",
+                    ];
+                    continue;
+                }
+
+                Grade::updateOrCreate(
+                    ['assessment_id' => $assessment->id, 'student_id' => $student->id],
+                    ['score' => $score]
+                );
+                $savedCount++;
+            }
+        }
+
+        if (! empty($errors)) {
+            DB::rollBack();
+            return response()->json([
+                'message' => 'Import failed due to validation errors. No grades were saved.',
+                'saved_count' => 0,
+                'errors' => $errors,
+            ], 422);
+        }
+
+        DB::commit();
+    } catch (\Throwable $e) {
+        DB::rollBack();
+        return response()->json(['message' => 'Import failed', 'error' => $e->getMessage()], 500);
+    }
+
+    return response()->json([
+        'message' => 'Grades imported successfully',
+        'saved_count' => $savedCount,
+    ], 201);
+}
 
 public function gradesForCourse($courseId)
 {

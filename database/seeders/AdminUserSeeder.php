@@ -24,7 +24,7 @@ class AdminUserSeeder extends Seeder
                 'username' => 'admin',
                 'password' => Hash::make('password123'),
                 'security_question' => 'What is your favorite color?',
-                'security_answer' => 'blue',
+                'security_answer' => Hash::make('blue'),
             ]);
 
             // Assign role using Spatie

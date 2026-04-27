@@ -149,6 +149,7 @@ class StudentController extends Controller
             'name' => 'required|string|max:255',
             'christian_name' => 'nullable|string|max:255',
             'age' => 'nullable|integer|min:1',
+            'sex' => 'required|in:Male,Female',
             'educational_level' => 'nullable|string|max:255',
             'subcity' => 'required|string|max:255',
             'district' => 'required|string|max:255',
@@ -167,6 +168,7 @@ class StudentController extends Controller
                 'name' => $request->name,
                 'christian_name' => $request->christian_name,
                 'age' => $request->age,
+                'sex' => $request->sex,
                 'educational_level' => $request->educational_level,
                 'phone_number' => $request->phone_number,
                 'section_id' => $section_id,
@@ -177,7 +179,7 @@ class StudentController extends Controller
             $student->contacts()->create([
                 'name' => $request->emergency_responder,
                 'phone_number' => $request->emergency_responder_phone_number,
-                'relationship' => 'Emergency Responder',
+                'type' => 'Emergency Responder',
             ]);
 
             return response()->json($student->load('address', 'contacts'), 201);
@@ -191,6 +193,7 @@ class StudentController extends Controller
             'name' => 'required|string|max:255',
             'christian_name' => 'nullable|string|max:255',
             'age' => 'nullable|integer|min:1',
+            'sex' => 'required|in:Male,Female',
             'educational_level' => 'nullable|string|max:255',
             'subcity' => 'required|string|max:255',
             'district' => 'required|string|max:255',
@@ -209,6 +212,7 @@ class StudentController extends Controller
                 'name' => $request->name,
                 'christian_name' => $request->christian_name,
                 'age' => $request->age,
+                'sex' => $request->sex,
                 'educational_level' => $request->educational_level,
                 'phone_number' => $request->phone_number,
                 'section_id' => $section_id,
@@ -290,7 +294,7 @@ class StudentController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'christian_name' => 'sometimes|nullable|string|max:255',
             'age' => 'sometimes|required|integer|min:1',
-            'phone_number' => 'sometimes|required|string|max:20',
+            'sex' => 'sometimes|required|in:Male,Female',
             'phone_number' => 'sometimes|required|string|max:20',
             'section_id' => 'sometimes|required|exists:sections,id',
             'section_name' => 'sometimes|required_without:section_id|string',
@@ -357,7 +361,7 @@ class StudentController extends Controller
                 $student->contacts()->create([
                     'name' => $request->input('emergency_responder'),
                     'phone_number' => $request->input('emergency_responder_phone_number'),
-                    'relationship' => 'Emergency Responder',
+                    'type' => 'Emergency Responder',
                 ]);
             }
 
