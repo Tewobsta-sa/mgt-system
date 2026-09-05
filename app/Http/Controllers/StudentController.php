@@ -4,13 +4,20 @@ namespace App\Http\Controllers;
 
 use App\Models\Student;
 use App\Models\Section;
+use App\Models\ProgramType;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
 class StudentController extends Controller
 {
     // ------------------ INDEX with search & pagination ------------------
+
+    public function indexPreKG(Request $request)
+    {
+        return $this->queryByType('PreKG', $request);
+    }
 
     public function indexRegular(Request $request)
     {
@@ -19,7 +26,8 @@ class StudentController extends Controller
 
     public function indexYoung(Request $request)
     {
-        return $this->queryByType('Young', $request);
+        // Support legacy Young calls by redirecting to Regular query
+        return $this->queryByType('Regular', $request);
     }
 
     public function indexDistance(Request $request)
@@ -27,12 +35,82 @@ class StudentController extends Controller
         return $this->queryByType('Distance', $request);
     }
 
+    public function indexAll(Request $request)
+    {
+        $search = $request->query('search');
+        $classification = $request->query('classification');
+        $status = $request->query('status');
+        $sectionId = $request->query('section_id');
+        $track = $request->query('track');
+
+        $query = Student::with(['address', 'contacts', 'section.programType']);
+
+        if ($track) {
+            $query->whereHas('section.programType', function ($q) use ($track) {
+                if (strcasecmp($track, 'Regular') === 0) {
+                    $q->whereIn('name', ['Regular', 'Young']);
+                } else {
+                    $q->where('name', $track);
+                }
+            });
+        }
+
+        if ($classification && $classification !== 'all') {
+            $query->where('classification', $classification);
+        }
+
+        if ($status && $status !== 'all') {
+            $query->where('status', $status);
+        }
+
+        if ($sectionId) {
+            $query->where('section_id', $sectionId);
+        }
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('student_id', 'like', "%{$search}%")
+                  ->orWhere('phone_number', 'like', "%{$search}%");
+            });
+        }
+
+        return $query->orderBy('id', 'desc')->paginate($request->query('per_page', 10));
+    }
+
     protected function queryByType(string $type, Request $request)
     {
         $search = $request->query('search');
+        $classification = $request->query('classification');
+        $status = $request->query('status');
 
-        $query = Student::with(['address', 'contacts', 'section.programType'])
-            ->whereHas('section.programType', fn($q) => $q->where('name', $type));
+        $query = Student::with(['address', 'contacts', 'section.programType']);
+
+        if (strcasecmp($type, 'PreKG') === 0) {
+            $query->where(function ($q) {
+                $q->whereHas('section.programType', fn($pt) => $pt->where('name', 'PreKG'))
+                  ->orWhereHas('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
+                  ->orWhere('classification', 'prekg');
+            });
+        } elseif (strcasecmp($type, 'Regular') === 0) {
+            $query->where(function ($q) {
+                $q->whereHas('section.programType', fn($pt) => $pt->whereIn('name', ['Regular', 'Young']))
+                  ->where(function ($qq) {
+                      $qq->whereDoesntHave('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
+                        ->orWhereNull('section_id');
+                  });
+            });
+        } elseif (strcasecmp($type, 'Distance') === 0) {
+            $query->whereHas('section.programType', fn($pt) => $pt->where('name', 'Distance'));
+        }
+
+        if ($classification && $classification !== 'all') {
+            $query->where('classification', $classification);
+        }
+
+        if ($status && $status !== 'all') {
+            $query->where('status', $status);
+        }
 
         if ($sectionId = $request->query('section_id')) {
             $query->where('section_id', $sectionId);
@@ -44,37 +122,39 @@ class StudentController extends Controller
 
         if ($search) {
             $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%$search%")
-                  ->orWhere('student_id', 'like', "%$search%");
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('student_id', 'like', "%{$search}%");
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate(10);
+        return $query->orderBy('id', 'desc')->paginate($request->query('per_page', 10));
     }
 
     // ------------------ SHOW ------------------
 
+    public function showPreKG($id)
+    {
+        return $this->showStudent($id);
+    }
+
     public function showRegular($id)
     {
-        return $this->showByType($id, 'Regular');
+        return $this->showStudent($id);
     }
 
     public function showYoung($id)
     {
-        return $this->showByType($id, 'Young');
+        return $this->showStudent($id);
     }
 
     public function showDistance($id)
     {
-        return $this->showByType($id, 'Distance');
+        return $this->showStudent($id);
     }
 
-    protected function showByType($id, string $type)
+    public function showStudent($id)
     {
         $student = Student::with(['address', 'contacts', 'section.programType'])->findOrFail($id);
-        if (strcasecmp($student->section->programType->name, $type) !== 0) {
-            return response()->json(['error' => 'Student type mismatch'], 422);
-        }
 
         $courseStats = DB::table('attendances')
             ->join('assignments', 'attendances.assignment_id', '=', 'assignments.id')
@@ -98,307 +178,435 @@ class StudentController extends Controller
             ? round(($mezmurStats->attended / $mezmurStats->total) * 100, 2) 
             : 0;
 
-        return $student;
+        return response()->json($student);
     }
 
-    // ------------------ STORE (Register) ------------------
+    // ------------------ STORE (Unified Registration) ------------------
+
+    public function storeUnified(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'christian_name' => 'nullable|string|max:255',
+            'birth_date' => 'nullable|date',
+            'sex' => 'required|in:Male,Female',
+            'educational_level' => 'nullable|string|max:255',
+            'grade_level' => 'nullable|string|max:50',
+            'occupation_type' => 'nullable|in:student,working',
+            'current_school' => 'nullable|string|max:255',
+            'current_office' => 'nullable|string|max:255',
+            'family_guardian_name' => 'nullable|string|max:255',
+            'family_guardian_phone' => 'nullable|string|max:25',
+            'emergency_contact_name' => 'nullable|string|max:255',
+            'emergency_contact_phone' => 'nullable|string|max:25',
+            'phone_number' => 'nullable|string|max:25',
+            'email_address' => 'nullable|email|max:255',
+            'telegram_user_name' => 'nullable|string|max:255',
+            'city' => 'nullable|string|max:255',
+            'subcity' => 'nullable|string|max:255',
+            'woreda' => 'nullable|string|max:255',
+            'kebele' => 'nullable|string|max:255',
+            'house_no' => 'nullable|string|max:255',
+            'classification' => 'nullable|string|max:50',
+            'status' => 'nullable|string|in:new,regular,Active,Inactive',
+            'section_id' => 'nullable|exists:sections,id',
+            'track' => 'nullable|string',
+            'picture' => 'nullable|image|max:10240',
+            'birth_certificates.*' => 'nullable|file|max:15360',
+            'educational_certificates.*' => 'nullable|file|max:15360',
+        ]);
+
+        $track = $request->input('track', 'Regular');
+        $prefix = match (strtolower($track)) {
+            'distance' => 'DIS',
+            'prekg' => 'PKG',
+            default => 'REG',
+        };
+
+        $studentId = $this->generateStudentId($prefix, $request->input('round'));
+
+        return DB::transaction(function () use ($request, $studentId, $prefix) {
+            // Handle picture upload
+            $picturePath = null;
+            if ($request->hasFile('picture')) {
+                $picturePath = $request->file('picture')->store('students/pictures', 'public');
+            }
+
+            // Handle birth certificates (1 or more)
+            $birthCertPaths = [];
+            if ($request->hasFile('birth_certificates')) {
+                $files = is_array($request->file('birth_certificates')) 
+                    ? $request->file('birth_certificates') 
+                    : [$request->file('birth_certificates')];
+                foreach ($files as $file) {
+                    $birthCertPaths[] = $file->store('students/birth_certificates', 'public');
+                }
+            }
+
+            // Handle educational certificates (1 or more)
+            $eduCertPaths = [];
+            if ($request->hasFile('educational_certificates')) {
+                $files = is_array($request->file('educational_certificates')) 
+                    ? $request->file('educational_certificates') 
+                    : [$request->file('educational_certificates')];
+                foreach ($files as $file) {
+                    $eduCertPaths[] = $file->store('students/educational_certificates', 'public');
+                }
+            }
+
+            // Calculate age if birth_date provided
+            $age = $request->input('age');
+            if (!$age && $request->filled('birth_date')) {
+                $age = \Carbon\Carbon::parse($request->input('birth_date'))->age;
+            }
+
+            // Resolve section if not provided directly
+            $sectionId = $request->input('section_id');
+            if (!$sectionId && $request->filled('section_name')) {
+                $section = Section::where('name', $request->input('section_name'))->first();
+                $sectionId = $section?->id;
+            }
+
+            // Create student
+            $student = Student::create([
+                'student_id' => $studentId,
+                'name' => $request->input('name'),
+                'christian_name' => $request->input('christian_name'),
+                'birth_date' => $request->input('birth_date'),
+                'sex' => $request->input('sex', 'Male'),
+                'age' => $age,
+                'educational_level' => $request->input('educational_level'),
+                'grade_level' => $request->input('grade_level'),
+                'occupation_type' => $request->input('occupation_type', 'student'),
+                'current_school' => $request->input('current_school'),
+                'current_office' => $request->input('current_office'),
+                'family_guardian_name' => $request->input('family_guardian_name') ?? $request->input('parent_name'),
+                'family_guardian_phone' => $request->input('family_guardian_phone') ?? $request->input('parent_phone_number'),
+                'emergency_contact_name' => $request->input('emergency_contact_name') ?? $request->input('emergency_responder'),
+                'emergency_contact_phone' => $request->input('emergency_contact_phone') ?? $request->input('emergency_responder_phone_number'),
+                'phone_number' => $request->input('phone_number'),
+                'email_address' => $request->input('email_address'),
+                'telegram_user_name' => $request->input('telegram_user_name'),
+                'classification' => $request->input('classification'),
+                'status' => $request->input('status', 'new'),
+                'section_id' => $sectionId,
+                'picture' => $picturePath,
+                'birth_certificates' => !empty($birthCertPaths) ? $birthCertPaths : null,
+                'educational_certificates' => !empty($eduCertPaths) ? $eduCertPaths : null,
+                'round' => $request->input('round'),
+            ]);
+
+            // Create Address
+            $student->address()->create([
+                'city' => $request->input('city', 'Addis Ababa'),
+                'subcity' => $request->input('subcity') ?? '',
+                'district' => $request->input('woreda') ?? $request->input('district') ?? '',
+                'woreda' => $request->input('woreda') ?? $request->input('district') ?? '',
+                'kebele' => $request->input('kebele'),
+                'special_place' => $request->input('special_place'),
+                'house_number' => $request->input('house_no') ?? $request->input('house_number'),
+                'house_no' => $request->input('house_no') ?? $request->input('house_number'),
+            ]);
+
+            // Create Contacts
+            if ($guardianName = $student->family_guardian_name) {
+                $student->contacts()->create([
+                    'name' => $guardianName,
+                    'phone_number' => $student->family_guardian_phone ?? '',
+                    'type' => 'Guardian',
+                ]);
+            }
+
+            if ($emergName = $student->emergency_contact_name) {
+                $student->contacts()->create([
+                    'name' => $emergName,
+                    'phone_number' => $student->emergency_contact_phone ?? '',
+                    'type' => 'Emergency',
+                ]);
+            }
+
+            return response()->json($student->load(['address', 'contacts', 'section.programType']), 201);
+        });
+    }
 
     public function storeRegular(Request $request)
     {
-        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Regular');
-        return $this->registerRegularStudent($request, $section_id);
+        return $this->storeUnified($request->merge(['track' => 'Regular']));
     }
 
     public function storeYoung(Request $request)
     {
-        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Young');
-        return $this->registerYoungStudent($request, $section_id);
+        return $this->storeUnified($request->merge(['track' => 'Regular']));
     }
 
     public function storeDistance(Request $request)
     {
-        $section_id = $request->input('section_id') ?? $this->resolveSection($request->input('section_name'), 'Distance');
-        return $this->registerDistanceStudent($request, $section_id);
+        return $this->storeUnified($request->merge(['track' => 'Distance']));
     }
 
-    // Section resolve helper
-    private function resolveSection(?string $sectionName, string $programTypeName): int
+    public function storePreKG(Request $request)
     {
-        if (!$sectionName) {
-            abort(422, "Section identifier required");
-        }
-        $section = Section::with('programType')
-            ->where('name', $sectionName)
-            ->first();
-
-        if (!$section) {
-            abort(422, "Section not found");
-        }
-
-        if (strcasecmp($section->programType->name, $programTypeName) !== 0) {
-            abort(422, "Section does not belong to program type $programTypeName");
-        }
-
-        return $section->id;
-    }
-
-    // Register Regular Student
-    private function registerRegularStudent(Request $request, int $section_id)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'christian_name' => 'nullable|string|max:255',
-            'age' => 'nullable|integer|min:1',
-            'educational_level' => 'nullable|string|max:255',
-            'subcity' => 'required|string|max:255',
-            'district' => 'required|string|max:255',
-            'special_place' => 'nullable|string|max:255',
-            'house_number' => 'nullable|string|max:255',
-            'emergency_responder' => 'required|string|max:255',
-            'phone_number' => 'required|string|max:20',
-            'emergency_responder_phone_number' => 'required|string|max:20',
-        ]);
-
-        $studentId = $this->generateStudentId('REG');
-
-        return DB::transaction(function () use ($request, $section_id, $studentId) {
-            $student = Student::create([
-                'student_id' => $studentId,
-                'name' => $request->name,
-                'christian_name' => $request->christian_name,
-                'age' => $request->age,
-                'educational_level' => $request->educational_level,
-                'phone_number' => $request->phone_number,
-                'section_id' => $section_id,
-            ]);
-
-            $student->address()->create($request->only('subcity', 'district', 'special_place', 'house_number'));
-
-            $student->contacts()->create([
-                'name' => $request->emergency_responder,
-                'phone_number' => $request->emergency_responder_phone_number,
-                'relationship' => 'Emergency Responder',
-            ]);
-
-            return response()->json($student->load('address', 'contacts'), 201);
-        });
-    }
-
-    // Register Young Student
-    private function registerYoungStudent(Request $request, int $section_id)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'christian_name' => 'nullable|string|max:255',
-            'age' => 'nullable|integer|min:1',
-            'educational_level' => 'nullable|string|max:255',
-            'subcity' => 'required|string|max:255',
-            'district' => 'required|string|max:255',
-            'special_place' => 'nullable|string|max:255',
-            'house_number' => 'nullable|string|max:255',
-            'parent_name' => 'required|string|max:255',
-            'phone_number' => 'required|string|max:20',
-            'parent_phone_number' => 'required|string|max:20',
-        ]);
-
-        $studentId = $this->generateStudentId('YNG');
-
-        return DB::transaction(function () use ($request, $section_id, $studentId) {
-            $student = Student::create([
-                'student_id' => $studentId,
-                'name' => $request->name,
-                'christian_name' => $request->christian_name,
-                'age' => $request->age,
-                'educational_level' => $request->educational_level,
-                'phone_number' => $request->phone_number,
-                'section_id' => $section_id,
-            ]);
-
-            $student->address()->create($request->only('subcity', 'district', 'special_place', 'house_number'));
-
-            $student->contacts()->create([
-                'name' => $request->parent_name,
-                'phone_number' => $request->parent_phone_number,
-                'type' => 'Parent',
-            ]);
-
-            return response()->json($student->load('address', 'contacts'), 201);
-        });
-    }
-
-    // Register Distance Student
-    private function registerDistanceStudent(Request $request, int $section_id)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'christian_name' => 'required|string|max:255',
-            'age' => 'required|integer|min:1',
-            'sex' => 'required|in:Male,Female',
-            'telegram_user_name' => 'nullable|string|max:255',
-            'email_address' => 'nullable|email|max:255',
-            'phone_number' => 'required|string|max:20',
-            'round' => 'required|string|max:10',
-        ]);
-
-        $studentId = $this->generateStudentId('DIS', $request->round);
-
-        return DB::transaction(function () use ($request, $section_id, $studentId) {
-            $student = Student::create([
-                'student_id' => $studentId,
-                'name' => $request->name,
-                'christian_name' => $request->christian_name,
-                'age' => $request->age,
-                'sex' => $request->sex,
-                'telegram_user_name' => $request->telegram_user_name,
-                'email_address' => $request->email_address,
-                'phone_number' => $request->phone_number,
-                'section_id' => $section_id,
-                'round' => $request->round,
-            ]);
-
-            return response()->json($student, 201);
-        });
+        return $this->storeUnified($request->merge(['track' => 'PreKG', 'classification' => 'prekg']));
     }
 
     // ------------------ UPDATE ------------------
 
-    public function updateRegular(Request $request, $id)
+    public function updateUnified(Request $request, $id)
     {
-        return $this->updateStudent($request, $id, 'Regular');
-    }
+        $student = Student::with(['address', 'contacts', 'section.programType'])->findOrFail($id);
 
-    public function updateYoung(Request $request, $id)
-    {
-        return $this->updateStudent($request, $id, 'Young');
-    }
-
-    public function updateDistance(Request $request, $id)
-    {
-        return $this->updateStudent($request, $id, 'Distance');
-    }
-
-    private function updateStudent(Request $request, $id, string $type)
-    {
-        $student = Student::with('section.programType')->findOrFail($id);
-
-        if (strcasecmp($student->section->programType->name, $type) !== 0) {
-            return response()->json(['error' => 'Student type mismatch'], 422);
-        }
-
-        // Validation rules based on type
-        $rules = [
+        $request->validate([
             'name' => 'sometimes|required|string|max:255',
-            'christian_name' => 'sometimes|nullable|string|max:255',
-            'age' => 'sometimes|required|integer|min:1',
-            'phone_number' => 'sometimes|required|string|max:20',
-            'phone_number' => 'sometimes|required|string|max:20',
-            'section_id' => 'sometimes|required|exists:sections,id',
-            'section_name' => 'sometimes|required_without:section_id|string',
-        ];
+            'christian_name' => 'nullable|string|max:255',
+            'birth_date' => 'nullable|date',
+            'sex' => 'sometimes|required|in:Male,Female',
+            'educational_level' => 'nullable|string|max:255',
+            'grade_level' => 'nullable|string|max:50',
+            'occupation_type' => 'nullable|in:student,working',
+            'current_school' => 'nullable|string|max:255',
+            'current_office' => 'nullable|string|max:255',
+            'family_guardian_name' => 'nullable|string|max:255',
+            'family_guardian_phone' => 'nullable|string|max:25',
+            'emergency_contact_name' => 'nullable|string|max:255',
+            'emergency_contact_phone' => 'nullable|string|max:25',
+            'phone_number' => 'nullable|string|max:25',
+            'email_address' => 'nullable|email|max:255',
+            'telegram_user_name' => 'nullable|string|max:255',
+            'city' => 'nullable|string|max:255',
+            'subcity' => 'nullable|string|max:255',
+            'woreda' => 'nullable|string|max:255',
+            'kebele' => 'nullable|string|max:255',
+            'house_no' => 'nullable|string|max:255',
+            'classification' => 'nullable|string|max:50',
+            'status' => 'nullable|string|in:new,regular,Active,Inactive',
+            'section_id' => 'nullable|exists:sections,id',
+            'picture' => 'nullable|image|max:10240',
+            'birth_certificates.*' => 'nullable|file|max:15360',
+            'educational_certificates.*' => 'nullable|file|max:15360',
+        ]);
 
-        if ($type === 'Regular' || $type === 'Young') {
-            $rules = array_merge($rules, [
-                'educational_level' => 'sometimes|required|string|max:255',
-                'subcity' => 'sometimes|required|string|max:255',
-                'district' => 'sometimes|required|string|max:255',
-                'special_place' => 'nullable|string|max:255',
-                'house_number' => 'nullable|string|max:255',
-            ]);
-        }
-
-        if ($type === 'Regular') {
-            $rules['emergency_responder'] = 'sometimes|required|string|max:255';
-            $rules['emergency_responder_phone_number'] = 'sometimes|required|string|max:20';
-        }
-
-        if ($type === 'Young') {
-            $rules['parent_name'] = 'sometimes|required|string|max:255';
-            $rules['parent_phone_number'] = 'sometimes|required|string|max:20';
-        }
-
-        if ($type === 'Distance') {
-            $rules = array_merge($rules, [
-                'sex' => 'sometimes|required|in:Male,Female',
-                'telegram_user_name' => 'nullable|string|max:255',
-                'email_address' => 'nullable|email|max:255',
-                'round' => 'sometimes|required|string|max:10',
-            ]);
-        }
-
-        $request->validate($rules);
-
-        // If section_id or section_name is provided, resolve and update section_id
-        if ($request->has('section_id')) {
-            $student->section_id = $request->input('section_id');
-        } elseif ($request->has('section_name')) {
-            $section_id = $this->resolveSection($request->input('section_name'), $type);
-            $student->section_id = $section_id;
-        }
-
-        // Update basic fields
-        foreach (['name', 'christian_name', 'age', 'phone_number', 'educational_level', 'sex', 'telegram_user_name', 'email_address', 'round'] as $field) {
-            if ($request->has($field)) {
-                $student->$field = $request->input($field);
+        return DB::transaction(function () use ($request, $student) {
+            // Handle picture upload
+            if ($request->hasFile('picture')) {
+                if ($student->picture) {
+                    Storage::disk('public')->delete($student->picture);
+                }
+                $student->picture = $request->file('picture')->store('students/pictures', 'public');
             }
-        }
 
-        $student->save();
+            // Handle birth certificates (1 or more)
+            if ($request->hasFile('birth_certificates')) {
+                $existing = $student->birth_certificates ?? [];
+                $files = is_array($request->file('birth_certificates')) 
+                    ? $request->file('birth_certificates') 
+                    : [$request->file('birth_certificates')];
+                foreach ($files as $file) {
+                    $existing[] = $file->store('students/birth_certificates', 'public');
+                }
+                $student->birth_certificates = $existing;
+            }
 
-        // Update related address and contacts for Regular and Young types
-        if ($type === 'Regular' || $type === 'Young') {
-            $addressData = $request->only(['subcity', 'district', 'special_place', 'house_number']);
+            // Handle educational certificates (1 or more)
+            if ($request->hasFile('educational_certificates')) {
+                $existing = $student->educational_certificates ?? [];
+                $files = is_array($request->file('educational_certificates')) 
+                    ? $request->file('educational_certificates') 
+                    : [$request->file('educational_certificates')];
+                foreach ($files as $file) {
+                    $existing[] = $file->store('students/educational_certificates', 'public');
+                }
+                $student->educational_certificates = $existing;
+            }
+
+            // Fill basic attributes
+            $fields = [
+                'name', 'christian_name', 'birth_date', 'sex', 'educational_level',
+                'grade_level', 'occupation_type', 'current_school', 'current_office',
+                'family_guardian_name', 'family_guardian_phone',
+                'emergency_contact_name', 'emergency_contact_phone',
+                'phone_number', 'email_address', 'telegram_user_name',
+                'classification', 'status', 'section_id', 'round'
+            ];
+
+            foreach ($fields as $f) {
+                if ($request->has($f)) {
+                    $student->$f = $request->input($f);
+                }
+            }
+
+            // Aliases from older forms
+            if ($request->has('parent_name') && !$request->has('family_guardian_name')) {
+                $student->family_guardian_name = $request->input('parent_name');
+            }
+            if ($request->has('parent_phone_number') && !$request->has('family_guardian_phone')) {
+                $student->family_guardian_phone = $request->input('parent_phone_number');
+            }
+            if ($request->has('emergency_responder') && !$request->has('emergency_contact_name')) {
+                $student->emergency_contact_name = $request->input('emergency_responder');
+            }
+            if ($request->has('emergency_responder_phone_number') && !$request->has('emergency_contact_phone')) {
+                $student->emergency_contact_phone = $request->input('emergency_responder_phone_number');
+            }
+
+            if ($request->filled('birth_date')) {
+                $student->age = \Carbon\Carbon::parse($request->input('birth_date'))->age;
+            } elseif ($request->has('age')) {
+                $student->age = $request->input('age');
+            }
+
+            $student->save();
+
+            // Update Address
+            $addressData = [];
+            if ($request->has('city')) $addressData['city'] = $request->input('city');
+            if ($request->has('subcity')) $addressData['subcity'] = $request->input('subcity');
+            if ($request->has('woreda')) {
+                $addressData['woreda'] = $request->input('woreda');
+                $addressData['district'] = $request->input('woreda');
+            } elseif ($request->has('district')) {
+                $addressData['district'] = $request->input('district');
+                $addressData['woreda'] = $request->input('district');
+            }
+            if ($request->has('kebele')) $addressData['kebele'] = $request->input('kebele');
+            if ($request->has('special_place')) $addressData['special_place'] = $request->input('special_place');
+            if ($request->has('house_no')) {
+                $addressData['house_no'] = $request->input('house_no');
+                $addressData['house_number'] = $request->input('house_no');
+            } elseif ($request->has('house_number')) {
+                $addressData['house_number'] = $request->input('house_number');
+                $addressData['house_no'] = $request->input('house_number');
+            }
+
             if (!empty($addressData)) {
                 $student->address()->updateOrCreate([], $addressData);
             }
 
-            // Contacts update
-            if ($type === 'Regular') {
-                $student->contacts()->delete();
-                $student->contacts()->create([
-                    'name' => $request->input('emergency_responder'),
-                    'phone_number' => $request->input('emergency_responder_phone_number'),
-                    'relationship' => 'Emergency Responder',
-                ]);
-            }
+            return response()->json($student->load(['address', 'contacts', 'section.programType']));
+        });
+    }
 
-            if ($type === 'Young') {
-                $student->contacts()->delete();
-                $student->contacts()->create([
-                    'name' => $request->input('parent_name'),
-                    'phone_number' => $request->input('parent_phone_number'),
-                    'type' => 'Parent',
-                ]);
-            }
+    public function updateRegular(Request $request, $id)
+    {
+        return $this->updateUnified($request, $id);
+    }
+
+    public function updateYoung(Request $request, $id)
+    {
+        return $this->updateUnified($request, $id);
+    }
+
+    public function updateDistance(Request $request, $id)
+    {
+        return $this->updateUnified($request, $id);
+    }
+
+    // ------------------ BULK ACTIONS ------------------
+
+    /**
+     * Bulk update status (e.g. from 'new' to 'regular')
+     */
+    public function bulkUpdateStatus(Request $request)
+    {
+        $validated = $request->validate([
+            'student_ids' => 'required|array|min:1',
+            'student_ids.*' => 'exists:students,id',
+            'status' => 'required|string|in:new,regular,Active,Inactive',
+        ]);
+
+        $count = Student::whereIn('id', $validated['student_ids'])
+            ->update(['status' => $validated['status']]);
+
+        return response()->json([
+            'message' => "Successfully updated {$count} students to '{$validated['status']}'.",
+            'count' => $count,
+        ]);
+    }
+
+    /**
+     * Bulk export student identification card data (photo, QR data, name, address, section)
+     */
+    public function getStudentsForIdCards(Request $request)
+    {
+        $query = Student::with(['address', 'section.programType']);
+
+        if ($ids = $request->input('student_ids')) {
+            $idArray = is_array($ids) ? $ids : explode(',', (string)$ids);
+            $query->whereIn('id', $idArray);
         }
 
-        return response()->json($student->load('address', 'contacts'));
+        if ($sectionId = $request->input('section_id')) {
+            $query->where('section_id', $sectionId);
+        }
+
+        if ($classification = $request->input('classification')) {
+            $query->where('classification', $classification);
+        }
+
+        if ($track = $request->input('track')) {
+            $query->whereHas('section.programType', fn($pt) => $pt->where('name', $track));
+        }
+
+        $students = $query->orderBy('name')->get();
+
+        $cardData = $students->map(function ($s) {
+            $addr = $s->address;
+            $addrParts = array_filter([
+                $addr?->city ?: 'Addis Ababa',
+                $addr?->subcity ? "Subcity: {$addr->subcity}" : null,
+                ($addr?->woreda ?: $addr?->district) ? "Woreda: " . ($addr->woreda ?: $addr->district) : null,
+                $addr?->kebele ? "Kebele: {$addr->kebele}" : null,
+                ($addr?->house_no ?: $addr?->house_number) ? "House: " . ($addr->house_no ?: $addr->house_number) : null,
+            ]);
+
+            return [
+                'id' => $s->id,
+                'student_id' => $s->student_id,
+                'name' => $s->name,
+                'christian_name' => $s->christian_name,
+                'picture_url' => $s->picture_url,
+                'section_name' => $s->section?->name ?? 'Unassigned',
+                'track' => $s->section?->programType?->name ?? 'Regular',
+                'classification' => $s->classification ?? 'Regular',
+                'grade_level' => $s->grade_level ?? $s->educational_level ?? 'N/A',
+                'address_string' => implode(', ', $addrParts),
+                'phone_number' => $s->phone_number,
+                'qr_code_data' => json_encode([
+                    'sid' => $s->student_id,
+                    'name' => $s->name,
+                    'sec' => $s->section?->name,
+                    'track' => $s->section?->programType?->name,
+                ]),
+            ];
+        });
+
+        return response()->json($cardData);
     }
 
     // ------------------ DELETE ------------------
 
     public function destroyRegular($id)
     {
-        return $this->destroyByType($id, 'Regular');
+        return $this->destroyStudent($id);
     }
 
     public function destroyYoung($id)
     {
-        return $this->destroyByType($id, 'Young');
+        return $this->destroyStudent($id);
     }
 
     public function destroyDistance($id)
     {
-        return $this->destroyByType($id, 'Distance');
+        return $this->destroyStudent($id);
     }
 
-    private function destroyByType($id, string $type)
+    public function destroyStudent($id)
     {
-        $student = Student::with('section.programType')->findOrFail($id);
-        if (strcasecmp($student->section->programType->name, $type) !== 0) {
-            return response()->json(['error' => 'Student type mismatch'], 422);
+        $student = Student::findOrFail($id);
+        if ($student->picture) {
+            Storage::disk('public')->delete($student->picture);
         }
         $student->delete();
-        return response()->json(null, 204);
+        return response()->json(['message' => 'Student deleted successfully.'], 200);
     }
 
     // ------------------ STUDENT ID GENERATION ------------------
@@ -413,6 +621,8 @@ class StudentController extends Controller
         return "{$prefix}/{$count}";
     }
 
+    // ------------------ MEZMUR ASSIGNMENT ------------------
+
     public function assignMezmur(Request $request)
     {
         $request->validate([
@@ -422,7 +632,7 @@ class StudentController extends Controller
 
         DB::transaction(function () use ($request) {
             Student::whereIn('id', $request->student_ids)
-                ->update(['is_mezmur' => true]);
+                ->update(['is_mezmur' => true, 'is_mezmur_member' => true]);
         });
 
         return response()->json(['message' => 'Students assigned to Mezmur successfully.']);
@@ -437,7 +647,7 @@ class StudentController extends Controller
 
         DB::transaction(function () use ($request) {
             Student::whereIn('id', $request->student_ids)
-                ->update(['is_mezmur' => false]);
+                ->update(['is_mezmur' => false, 'is_mezmur_member' => false]);
         });
 
         return response()->json(['message' => 'Students removed from Mezmur successfully.']);
@@ -448,19 +658,18 @@ class StudentController extends Controller
         $search = $request->query('search');
 
         $query = Student::with(['address', 'contacts', 'section.programType'])
-            ->where('is_mezmur', true);
+            ->where(function ($q) {
+                $q->where('is_mezmur', true)
+                  ->orWhere('is_mezmur_member', true);
+            });
 
         if ($search) {
             $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%$search%")
-                ->orWhere('student_id', 'like', "%$search%");
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('student_id', 'like', "%{$search}%");
             });
         }
 
         return $query->orderBy('id', 'desc')->paginate(10);
     }
-
-
 }
-
-

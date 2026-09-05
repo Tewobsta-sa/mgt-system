@@ -12,6 +12,14 @@ class Address extends Model
     }
 
     protected $fillable = [
-        'subcity', 'district', 'special_place', 'house_number'
+        'student_id',
+        'city',
+        'subcity',
+        'district',
+        'woreda',
+        'kebele',
+        'special_place',
+        'house_number',
+        'house_no',
     ];
 }

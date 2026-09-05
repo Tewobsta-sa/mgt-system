@@ -23,7 +23,12 @@ class SectionController extends Controller
             $query->where('program_type_id', $request->program_type_id);
         }
 
-        return response()->json($query->paginate(15));
+        if ($request->boolean('all')) {
+            return response()->json(['data' => $query->get()]);
+        }
+
+        $perPage = $request->get('per_page', 50);
+        return response()->json($query->paginate($perPage));
     }
 
     // Create a new section

@@ -11,45 +11,93 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class StudentImportController extends Controller
 {
-    private const TRACK_REGULAR  = 'Regular';
-    private const TRACK_YOUNG    = 'Young';
-    private const TRACK_DISTANCE = 'Distance';
-
-    private const HEADER_MAP = [
-        self::TRACK_REGULAR => [
-            'name', 'christian_name', 'age', 'sex', 'educational_level',
-            'subcity', 'district', 'special_place', 'house_number',
-            'phone_number', 'emergency_responder', 'emergency_responder_phone_number',
-            'section_name',
-        ],
-        self::TRACK_YOUNG => [
-            'name', 'christian_name', 'age', 'sex', 'educational_level',
-            'subcity', 'district', 'special_place', 'house_number',
-            'phone_number', 'parent_name', 'parent_phone_number',
-            'section_name',
-        ],
-        self::TRACK_DISTANCE => [
-            'name', 'christian_name', 'age', 'sex',
-            'phone_number', 'email_address', 'telegram_user_name',
-            'round', 'section_name',
-        ],
+    private const HEADERS = [
+        'name',
+        'christian_name',
+        'birth_date',
+        'sex',
+        'education_level',
+        'grade_level',
+        'occupation_type',
+        'curr_school_or_office',
+        'family_guardian_name',
+        'family_guardian_phone',
+        'emergency_contact_name',
+        'emergency_contact_phone',
+        'city',
+        'subcity',
+        'woreda',
+        'kebele',
+        'house_no',
+        'classification',
+        'section_name',
+        'status',
     ];
 
-    public function template(string $track)
+    private const FIELD_GUIDE = [
+        '[MANDATORY]',
+        '[OPTIONAL]',
+        '[OPTIONAL YYYY-MM-DD]',
+        '[MANDATORY Male/Female]',
+        '[MANDATORY: elementary/highschool/diploma/degree/masters/phd]',
+        '[OPTIONAL e.g. Grade 4]',
+        '[MANDATORY: student/working]',
+        '[OPTIONAL School or Company Name]',
+        '[MANDATORY Guardian Name]',
+        '[MANDATORY Guardian Phone]',
+        '[MANDATORY Emergency Name]',
+        '[MANDATORY Emergency Phone]',
+        '[OPTIONAL default Addis Ababa]',
+        '[MANDATORY Subcity]',
+        '[MANDATORY Woreda]',
+        '[OPTIONAL Kebele]',
+        '[OPTIONAL House No]',
+        '[OPTIONAL: prekg/htsanat/maekelawyan/wetatoch/distance]',
+        '[MANDATORY Section Name]',
+        '[OPTIONAL: new/regular (default: new)]',
+    ];
+
+    private const SAMPLE_ROW = [
+        '# Example: Abebe Kebede',
+        'Gebre Mikael',
+        '2012-05-15',
+        'Male',
+        'elementary',
+        'Grade 5',
+        'student',
+        'St. Mary Primary School',
+        'Kebede Tadesse',
+        '0911223344',
+        'Almaz Tesfaye',
+        '0922334455',
+        'Addis Ababa',
+        'Bole',
+        'Woreda 03',
+        'Kebele 05',
+        '1234',
+        'maekelawyan',
+        'Maekelawyan 5 (Grade 5)',
+        'new',
+    ];
+
+    public function template(?string $track = 'Regular')
     {
-        $programType = $this->resolveProgramType($track);
-        $headers = self::HEADER_MAP[$programType];
+        $filename = "students-import-template.csv";
 
-        $filename = "students-{$track}-import-template.csv";
-
-        return new StreamedResponse(function () use ($headers) {
+        return new StreamedResponse(function () {
             $out = fopen('php://output', 'w');
-            // BOM so Excel opens UTF-8 (Amharic) correctly
+            // Write UTF-8 BOM so Excel opens properly
             fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, $headers);
-            // Hint row to help users (ignored on import; recognized by the starts-with-# rule)
-            $example = array_fill(0, count($headers), '');
-            fputcsv($out, $example);
+            
+            // Header Row (clean machine keys)
+            fputcsv($out, self::HEADERS);
+
+            // Row 2: Mandatory / Optional / format guidelines
+            fputcsv($out, self::FIELD_GUIDE);
+
+            // Row 3: Concrete example row
+            fputcsv($out, self::SAMPLE_ROW);
+
             fclose($out);
         }, 200, [
             'Content-Type' => 'text/csv; charset=UTF-8',
@@ -57,10 +105,8 @@ class StudentImportController extends Controller
         ]);
     }
 
-    public function import(Request $request, string $track)
+    public function import(Request $request)
     {
-        $programType = $this->resolveProgramType($track);
-
         $request->validate([
             'file' => 'required|file|mimes:csv,txt,xlsx,xls|max:10240',
         ]);
@@ -74,16 +120,17 @@ class StudentImportController extends Controller
 
         $headerRow = array_shift($rows);
         $headerRow = array_map(
-            fn ($h) => strtolower(trim(preg_replace('/\s+/', '_', (string) $h))),
+            fn ($h) => strtolower(trim(preg_replace('/[^a-zA-Z0-9_]/', '', str_replace([' ', '-'], '_', (string) $h)))),
             $headerRow
         );
 
-        $expected = self::HEADER_MAP[$programType];
-        $missing = array_diff($expected, $headerRow);
-        if (! empty($missing)) {
+        // Verify key columns
+        $requiredKeys = ['name', 'sex', 'family_guardian_name', 'family_guardian_phone', 'subcity', 'woreda', 'section_name'];
+        $missing = array_diff($requiredKeys, $headerRow);
+        if (!empty($missing)) {
             return response()->json([
-                'message' => 'Missing required columns: ' . implode(', ', $missing),
-                'expected_columns' => $expected,
+                'message' => 'Missing required column headers: ' . implode(', ', $missing),
+                'expected_columns' => self::HEADERS,
             ], 422);
         }
 
@@ -93,92 +140,154 @@ class StudentImportController extends Controller
         DB::beginTransaction();
         try {
             foreach ($rows as $i => $row) {
-                $rowNumber = $i + 2; // account for header
+                $rowNumber = $i + 2;
 
-                // Skip fully empty rows
-                if (count(array_filter($row, fn ($v) => trim((string) $v) !== '')) === 0) {
+                // Skip comment or guide rows
+                $firstCell = isset($row[0]) ? trim((string)$row[0]) : '';
+                if ($firstCell === '' || str_starts_with($firstCell, '#') || str_starts_with($firstCell, '[')) {
                     continue;
                 }
 
+                // Map data
                 $payload = [];
                 foreach ($headerRow as $idx => $key) {
+                    if (empty($key)) continue;
                     $payload[$key] = isset($row[$idx]) ? trim((string) $row[$idx]) : null;
                     if ($payload[$key] === '') {
                         $payload[$key] = null;
                     }
                 }
 
-                $validator = $this->validatorFor($programType, $payload);
+                // Validate row
+                $validator = Validator::make($payload, [
+                    'name' => ['required', 'string', 'max:255'],
+                    'christian_name' => ['nullable', 'string', 'max:255'],
+                    'birth_date' => ['nullable', 'date'],
+                    'sex' => ['required', 'in:Male,Female,male,female'],
+                    'education_level' => ['nullable', 'string', 'max:255'],
+                    'grade_level' => ['nullable', 'string', 'max:50'],
+                    'occupation_type' => ['nullable', 'string'],
+                    'curr_school_or_office' => ['nullable', 'string', 'max:255'],
+                    'family_guardian_name' => ['required', 'string', 'max:255'],
+                    'family_guardian_phone' => ['required', 'string', 'max:25'],
+                    'emergency_contact_name' => ['nullable', 'string', 'max:255'],
+                    'emergency_contact_phone' => ['nullable', 'string', 'max:25'],
+                    'subcity' => ['required', 'string', 'max:255'],
+                    'woreda' => ['required', 'string', 'max:255'],
+                    'section_name' => ['required', 'string', 'max:255'],
+                ]);
+
                 if ($validator->fails()) {
                     $errors[] = ['row' => $rowNumber, 'errors' => $validator->errors()->all()];
                     continue;
                 }
 
-                try {
-                    $section = $this->resolveSection($payload['section_name'], $programType);
-                } catch (\Throwable $e) {
-                    $errors[] = ['row' => $rowNumber, 'errors' => [$e->getMessage()]];
+                // Resolve section
+                $sectionName = $payload['section_name'];
+                $section = Section::where('name', $sectionName)
+                    ->orWhere('name', 'like', "%{$sectionName}%")
+                    ->first();
+
+                if (!$section) {
+                    $errors[] = ['row' => $rowNumber, 'errors' => ["Section '{$sectionName}' not found in system."]];
                     continue;
                 }
 
-                $studentId = $this->generateStudentId($programType, $payload['round'] ?? null);
+                // Determine classification & prefix
+                $classification = $payload['classification'] ?? null;
+                $trackName = $section->programType?->name ?? 'Regular';
+                $prefix = match (strtolower($trackName)) {
+                    'distance' => 'DIS',
+                    'prekg' => 'PKG',
+                    default => 'REG',
+                };
 
-                $studentAttrs = [
-                    'student_id'        => $studentId,
-                    'name'              => $payload['name'],
-                    'christian_name'    => $payload['christian_name'] ?? null,
-                    'age'               => isset($payload['age']) ? (int) $payload['age'] : null,
-                    'sex'               => $payload['sex'] ?? null,
-                    'phone_number'      => $payload['phone_number'] ?? null,
-                    'educational_level' => $payload['educational_level'] ?? null,
-                    'section_id'        => $section->id,
-                ];
+                $studentId = $this->generateStudentId($prefix);
 
-                if ($programType === self::TRACK_DISTANCE) {
-                    $studentAttrs['sex'] = $payload['sex'] ?? null;
-                    $studentAttrs['email_address'] = $payload['email_address'] ?? null;
-                    $studentAttrs['telegram_user_name'] = $payload['telegram_user_name'] ?? null;
-                    $studentAttrs['round'] = $payload['round'] ?? null;
-                }
-
-                $student = Student::create($studentAttrs);
-
-                if (in_array($programType, [self::TRACK_REGULAR, self::TRACK_YOUNG], true)) {
-                    $student->address()->create([
-                        'subcity'       => $payload['subcity'] ?? null,
-                        'district'      => $payload['district'] ?? null,
-                        'special_place' => $payload['special_place'] ?? null,
-                        'house_number'  => $payload['house_number'] ?? null,
-                    ]);
-
-                    if ($programType === self::TRACK_REGULAR) {
-                        $student->contacts()->create([
-                            'name'         => $payload['emergency_responder'],
-                            'phone_number' => $payload['emergency_responder_phone_number'],
-                            'relationship' => 'Emergency Responder',
-                        ]);
-                    } else {
-                        $student->contacts()->create([
-                            'name'         => $payload['parent_name'],
-                            'phone_number' => $payload['parent_phone_number'],
-                            'relationship' => 'Parent',
-                        ]);
+                $age = null;
+                if (!empty($payload['birth_date'])) {
+                    try {
+                        $age = \Carbon\Carbon::parse($payload['birth_date'])->age;
+                    } catch (\Throwable $t) {
+                        $age = null;
                     }
                 }
 
+                $occupation = strtolower($payload['occupation_type'] ?? 'student');
+                $currSchool = null;
+                $currOffice = null;
+                if (!empty($payload['curr_school_or_office'])) {
+                    if ($occupation === 'working') {
+                        $currOffice = $payload['curr_school_or_office'];
+                    } else {
+                        $currSchool = $payload['curr_school_or_office'];
+                    }
+                }
+
+                $sex = ucfirst(strtolower($payload['sex']));
+
+                // Create Student
+                $student = Student::create([
+                    'student_id' => $studentId,
+                    'name' => $payload['name'],
+                    'christian_name' => $payload['christian_name'] ?? null,
+                    'birth_date' => $payload['birth_date'] ?? null,
+                    'sex' => $sex,
+                    'age' => $age,
+                    'educational_level' => $payload['education_level'] ?? null,
+                    'grade_level' => $payload['grade_level'] ?? null,
+                    'occupation_type' => in_array($occupation, ['student', 'working']) ? $occupation : 'student',
+                    'current_school' => $currSchool,
+                    'current_office' => $currOffice,
+                    'family_guardian_name' => $payload['family_guardian_name'],
+                    'family_guardian_phone' => $payload['family_guardian_phone'],
+                    'emergency_contact_name' => $payload['emergency_contact_name'] ?? $payload['family_guardian_name'],
+                    'emergency_contact_phone' => $payload['emergency_contact_phone'] ?? $payload['family_guardian_phone'],
+                    'phone_number' => $payload['family_guardian_phone'] ?? null,
+                    'section_id' => $section->id,
+                    'classification' => $classification,
+                    'status' => strtolower($payload['status'] ?? 'new') === 'regular' ? 'regular' : 'new',
+                ]);
+
+                // Create Address
+                $student->address()->create([
+                    'city' => $payload['city'] ?? 'Addis Ababa',
+                    'subcity' => $payload['subcity'],
+                    'district' => $payload['woreda'],
+                    'woreda' => $payload['woreda'],
+                    'kebele' => $payload['kebele'] ?? null,
+                    'house_number' => $payload['house_no'] ?? null,
+                    'house_no' => $payload['house_no'] ?? null,
+                ]);
+
+                // Create Contacts
+                $student->contacts()->create([
+                    'name' => $student->family_guardian_name,
+                    'phone_number' => $student->family_guardian_phone,
+                    'type' => 'Guardian',
+                ]);
+
+                if (!empty($student->emergency_contact_name)) {
+                    $student->contacts()->create([
+                        'name' => $student->emergency_contact_name,
+                        'phone_number' => $student->emergency_contact_phone,
+                        'type' => 'Emergency',
+                    ]);
+                }
+
                 $created[] = [
-                    'row'        => $rowNumber,
+                    'row' => $rowNumber,
                     'student_id' => $student->student_id,
-                    'name'       => $student->name,
+                    'name' => $student->name,
                 ];
             }
 
-            if (! empty($errors)) {
+            if (!empty($errors)) {
                 DB::rollBack();
                 return response()->json([
-                    'message'       => 'Import failed due to validation errors. No students were saved.',
+                    'message' => 'Import failed due to validation errors. No students were saved.',
                     'created_count' => 0,
-                    'errors'        => $errors,
+                    'errors' => $errors,
                 ], 422);
             }
 
@@ -186,107 +295,27 @@ class StudentImportController extends Controller
         } catch (\Throwable $e) {
             DB::rollBack();
             return response()->json([
-                'message' => 'Import failed',
-                'error'   => $e->getMessage(),
+                'message' => 'Import failed: ' . $e->getMessage(),
             ], 500);
         }
 
         return response()->json([
-            'message'       => 'Students imported successfully',
+            'message' => 'Students imported successfully',
             'created_count' => count($created),
-            'created'       => $created,
+            'created' => $created,
         ], 201);
     }
 
-    private function validatorFor(string $programType, array $payload): \Illuminate\Validation\Validator
+    private function generateStudentId(string $prefix, ?string $round = null): string
     {
-        $rules = [
-            'name'           => ['required', 'string', 'max:255'],
-            'christian_name' => ['nullable', 'string', 'max:255'],
-            'age'            => ['required', 'integer', 'min:1', 'max:120'],
-            'sex'            => ['required', 'in:Male,Female'],
-            'phone_number'   => ['required', 'string', 'max:20'],
-            'section_name'   => ['required', 'string', 'max:255'],
-        ];
-
-        if ($programType === self::TRACK_REGULAR || $programType === self::TRACK_YOUNG) {
-            $rules['educational_level'] = ['required', 'string', 'max:255'];
-            $rules['subcity']           = ['required', 'string', 'max:255'];
-            $rules['district']          = ['required', 'string', 'max:255'];
-            $rules['special_place']     = ['nullable', 'string', 'max:255'];
-            $rules['house_number']      = ['nullable', 'string', 'max:255'];
-        }
-
-        if ($programType === self::TRACK_REGULAR) {
-            $rules['emergency_responder']              = ['required', 'string', 'max:255'];
-            $rules['emergency_responder_phone_number'] = ['required', 'string', 'max:20'];
-        }
-
-        if ($programType === self::TRACK_YOUNG) {
-            $rules['parent_name']         = ['required', 'string', 'max:255'];
-            $rules['parent_phone_number'] = ['required', 'string', 'max:20'];
-        }
-
-        if ($programType === self::TRACK_DISTANCE) {
-            $rules['email_address']      = ['nullable', 'email', 'max:255'];
-            $rules['telegram_user_name'] = ['nullable', 'string', 'max:255'];
-            $rules['round']              = ['required', 'string', 'max:10'];
-        }
-
-        return Validator::make($payload, $rules);
-    }
-
-    private function resolveProgramType(string $track): string
-    {
-        $track = ucfirst(strtolower($track));
-        if (! in_array($track, [self::TRACK_REGULAR, self::TRACK_YOUNG, self::TRACK_DISTANCE], true)) {
-            abort(422, "Unknown track: {$track}");
-        }
-        return $track;
-    }
-
-    private function resolveSection(?string $sectionName, string $programType): Section
-    {
-        if (! $sectionName) {
-            throw new \RuntimeException('Section not specified');
-        }
-
-        $section = Section::with('programType')->where('name', $sectionName)->first();
-
-        if (! $section) {
-            throw new \RuntimeException("Section '{$sectionName}' not found");
-        }
-
-        if (strcasecmp($section->programType->name ?? '', $programType) !== 0) {
-            throw new \RuntimeException("Section '{$sectionName}' does not belong to program type {$programType}");
-        }
-
-        return $section;
-    }
-
-    private function generateStudentId(string $programType, ?string $round = null): string
-    {
-        $prefix = match ($programType) {
-            self::TRACK_REGULAR  => 'REG',
-            self::TRACK_YOUNG    => 'YNG',
-            self::TRACK_DISTANCE => 'DIS',
-        };
-
         if ($prefix === 'DIS' && $round) {
             $count = Student::where('student_id', 'like', "{$prefix}/{$round}/%")->count() + 1;
             return "{$prefix}/{$round}/{$count}";
         }
-
         $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
         return "{$prefix}/{$count}";
     }
 
-    /**
-     * Read rows from a CSV or XLSX file. XLSX is supported when
-     * phpoffice/phpspreadsheet is installed.
-     *
-     * @return array<int, array<int, mixed>>
-     */
     private function readRows(\Illuminate\Http\UploadedFile $file): array
     {
         $extension = strtolower($file->getClientOriginalExtension());
@@ -306,16 +335,13 @@ class StudentImportController extends Controller
     {
         $rows = [];
         $handle = fopen($path, 'r');
-        if (! $handle) {
-            return $rows;
-        }
+        if (!$handle) return $rows;
 
-        // Strip UTF-8 BOM if present
+        // Strip UTF-8 BOM
         $first = fgets($handle);
         if ($first !== false) {
             $first = preg_replace('/^\xEF\xBB\xBF/', '', $first);
             rewind($handle);
-            // Re-read without BOM by writing to temp buffer
             $content = stream_get_contents($handle);
             $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
             fclose($handle);
@@ -336,7 +362,7 @@ class StudentImportController extends Controller
 
     private function readSpreadsheet(string $path): array
     {
-        if (! class_exists('PhpOffice\\PhpSpreadsheet\\IOFactory')) {
+        if (!class_exists('PhpOffice\\PhpSpreadsheet\\IOFactory')) {
             abort(422, 'XLSX support requires phpoffice/phpspreadsheet. Please install it or upload CSV.');
         }
 

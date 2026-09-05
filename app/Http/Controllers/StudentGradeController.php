@@ -175,5 +175,106 @@ class StudentGradeController extends Controller
             : 0
     ];
 }
+
+    /**
+     * Get complete report cards for all students in a section (used for bulk PDF generation)
+     */
+    public function sectionReportCards($sectionId)
+    {
+        $students = Student::with(['address', 'section.programType'])
+            ->where('section_id', $sectionId)
+            ->get();
+
+        if ($students->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $assignmentIds = \App\Models\Assignment::where('section_id', $sectionId)
+            ->where('type', 'Course')
+            ->pluck('id');
+
+        $courseIds = \App\Models\AssignmentCourse::whereIn('assignment_id', $assignmentIds)
+            ->pluck('course_id');
+
+        $courses = Course::with('assessments')->whereIn('id', $courseIds)->get();
+
+        $allReports = [];
+
+        foreach ($students as $student) {
+            $studentCourses = [];
+            $sumCoursePct = 0;
+            $countCourses = 0;
+
+            foreach ($courses as $course) {
+                $assessments = $course->assessments;
+                if ($assessments->isEmpty()) continue;
+
+                $sumWeighted = 0;
+                $sumWeights = 0;
+                $assessmentItems = [];
+
+                foreach ($assessments as $assessment) {
+                    $weight = (float) $assessment->weight;
+                    $sumWeights += $weight;
+
+                    $grade = $assessment->grades()->where('student_id', $student->id)->first();
+                    $rawScore = $grade ? (float)$grade->score : 0;
+                    $maxScore = (float)$assessment->max_score > 0 ? (float)$assessment->max_score : 100;
+
+                    if ($maxScore > 0) {
+                        $sumWeighted += ($rawScore / $maxScore) * $weight;
+                    }
+
+                    $assessmentItems[] = [
+                        'assessment_id' => $assessment->id,
+                        'title' => $assessment->title,
+                        'score' => $rawScore,
+                        'max_score' => $maxScore,
+                        'weight' => $weight,
+                    ];
+                }
+
+                if ($sumWeights > 0) {
+                    $coursePct = round(($sumWeighted / $sumWeights) * 100, 2);
+                    $sumCoursePct += $coursePct;
+                    $countCourses++;
+                } else {
+                    $coursePct = 0;
+                }
+
+                $studentCourses[] = [
+                    'course_id' => $course->id,
+                    'course_name' => $course->name,
+                    'course_percentage' => $coursePct,
+                    'assessments' => $assessmentItems,
+                ];
+            }
+
+            $overallAvg = $countCourses > 0 ? round($sumCoursePct / $countCourses, 2) : 0;
+
+            $allReports[] = [
+                'id' => $student->id,
+                'name' => $student->name,
+                'christian_name' => $student->christian_name,
+                'student_id' => $student->student_id,
+                'picture_url' => $student->picture_url,
+                'section_id' => $student->section_id,
+                'section_name' => $student->section?->name ?? 'Unassigned',
+                'track' => $student->section?->programType?->name ?? 'Regular',
+                'classification' => $student->classification ?? 'Regular',
+                'overall_average' => $overallAvg,
+                'courses' => $studentCourses,
+            ];
+        }
+
+        // Calculate rank
+        usort($allReports, fn($a, $b) => $b['overall_average'] <=> $a['overall_average']);
+        foreach ($allReports as $idx => &$rep) {
+            $rep['rank'] = $idx + 1;
+            $rep['total_students'] = count($allReports);
+        }
+
+        return response()->json($allReports);
+    }
 }
 

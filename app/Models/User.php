@@ -27,6 +27,8 @@ class User extends Authenticatable
         'security_answer',
     ];
 
+    protected $with = ['roles'];
+
     protected $guarded = [];
 
     /**

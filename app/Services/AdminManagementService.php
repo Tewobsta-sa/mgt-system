@@ -65,11 +65,14 @@ class AdminManagementService
 
         $otherAdminCount = User::whereHas('roles', function ($query) {
             $query->whereIn('name', [
+                'yesew_habt',
+                'mereja_kfl',
+                'mezmur_kfl',
+                'tmhrt_kfl',
                 'mezmur_office_admin',
                 'tmhrt_office_admin',
                 'distance_admin',
                 'gngnunet_office_admin',
-                'young_tmhrt_admin'
             ]);
         })->count();
 
@@ -104,15 +107,14 @@ class AdminManagementService
         // Define role hierarchy (higher number = higher privilege)
         $roleHierarchy = [
             'super_admin' => 100,
+            'yesew_habt' => 80,
+            'mezmur_kfl' => 80,
+            'tmhrt_kfl' => 80,
+            'mereja_kfl' => 70,
             'mezmur_office_admin' => 80,
             'tmhrt_office_admin' => 80,
             'distance_admin' => 80,
             'gngnunet_office_admin' => 80,
-            'young_tmhrt_admin' => 80,
-            'mezmur_office_coordinator' => 60,
-            'tmhrt_office_coordinator' => 60,
-            'distance_coordinator' => 60,
-            'gngnunet_office_coordinator' => 60,
             'teacher' => 40,
             'student' => 20,
         ];
@@ -136,11 +138,10 @@ class AdminManagementService
             
             // Define which roles each admin can manage
             $manageableRoles = match ($currentUserRole) {
-                'mezmur_office_admin' => ['mezmur_office_coordinator', 'teacher', 'student'],
-                'tmhrt_office_admin' => ['tmhrt_office_coordinator', 'teacher', 'student'],
+                'yesew_habt', 'gngnunet_office_admin' => ['teacher', 'student'],
+                'mezmur_kfl', 'mezmur_office_admin' => ['mezmur_office_coordinator', 'teacher', 'student'],
+                'tmhrt_kfl', 'tmhrt_office_admin' => ['tmhrt_office_coordinator', 'teacher', 'student'],
                 'distance_admin' => ['distance_coordinator', 'teacher', 'student'],
-                'gngnunet_office_admin' => ['gngnunet_office_coordinator', 'student'],
-                'young_tmhrt_admin' => ['teacher', 'student'],
                 default => []
             };
 

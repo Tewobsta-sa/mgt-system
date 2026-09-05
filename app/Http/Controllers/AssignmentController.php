@@ -59,11 +59,11 @@ class AssignmentController extends Controller
             'assignmentCourses.teacher'
         ]);
 
-        if ($user->hasRole('super_admin')) {
+        if ($user->hasRole('super_admin') || $user->hasRole('mereja_kfl') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin')) {
             // Can see everything
-        } elseif ($user->hasRole('tmhrt_office_admin')) {
+        } elseif ($user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin')) {
             $query->where('type', 'Course');
-        } elseif ($user->hasRole('mezmur_office_admin')) {
+        } elseif ($user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin')) {
             $query->where('type', 'MezmurTraining');
         } elseif ($user->hasRole('teacher')) {
             // Teachers see only course assignments they are attached to
@@ -107,7 +107,7 @@ class AssignmentController extends Controller
         }
 
         if ($assignment->type === 'Course') {
-            $isOfficeAdmin = $user->hasRole('tmhrt_office_admin') || $user->hasRole('super_admin');
+            $isOfficeAdmin = $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin') || $user->hasRole('super_admin') || $user->hasRole('mereja_kfl');
             $isAssignedTeacher = $user->hasRole('teacher') && (
                 $assignment->user_id === $user->id ||
                 $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists()
@@ -116,7 +116,7 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Forbidden'], 403);
             }
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !($user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin') || $user->hasRole('super_admin') || $user->hasRole('mereja_kfl'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -144,9 +144,11 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
         }
 
-        if ($user->hasRole('super_admin') || $user->hasRole('tmhrt_office_admin')) {
-            // Optimization: If super_admin is creating a MezmurTraining, we should branch differently.
-            // But let's assume if it's super_admin and type is Course, they follow this branch.
+        if ($user->hasRole('mezmur_kfl') || ($user->hasRole('mezmur_office_admin') && !$user->hasRole('super_admin'))) {
+            goto mezmur_branch;
+        }
+
+        if ($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin')) {
             if ($request->type === 'MezmurTraining' && $user->hasRole('super_admin')) {
                 goto mezmur_branch;
             }
@@ -261,7 +263,7 @@ class AssignmentController extends Controller
             }
         } 
         mezmur_branch:
-        if ($user->hasRole('super_admin') || $user->hasRole('mezmur_office_admin')) {
+        if ($user->hasRole('super_admin') || $user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin')) {
             $rules = [
                 'trainer_id' => 'required|exists:trainers,id',
                 'mezmur_ids' => 'required|array|min:1',

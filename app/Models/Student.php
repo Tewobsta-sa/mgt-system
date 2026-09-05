@@ -26,11 +26,68 @@ class Student extends Model
         return $this->hasMany(Grade::class);
     }
 
+    public function attendances()
+    {
+        return $this->hasMany(Attendance::class);
+    }
+
+    public function mezmurExamResults()
+    {
+        return $this->hasMany(MezmurExamResult::class);
+    }
+
+    public function nominator()
+    {
+        return $this->belongsTo(User::class, 'nominated_by');
+    }
+
+    public function approver()
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    public function targetSection()
+    {
+        return $this->belongsTo(Section::class, 'target_section_id');
+    }
+
+    protected $appends = [
+        'picture_url',
+        'birth_certificates_urls',
+        'educational_certificates_urls',
+    ];
+
+    public function getPictureUrlAttribute()
+    {
+        if (!$this->picture) return null;
+        if (filter_var($this->picture, FILTER_VALIDATE_URL)) return $this->picture;
+        return url('storage/' . ltrim($this->picture, '/'));
+    }
+
+    public function getBirthCertificatesUrlsAttribute()
+    {
+        if (empty($this->birth_certificates)) return [];
+        return array_map(function ($path) {
+            if (filter_var($path, FILTER_VALIDATE_URL)) return $path;
+            return url('storage/' . ltrim($path, '/'));
+        }, (array) $this->birth_certificates);
+    }
+
+    public function getEducationalCertificatesUrlsAttribute()
+    {
+        if (empty($this->educational_certificates)) return [];
+        return array_map(function ($path) {
+            if (filter_var($path, FILTER_VALIDATE_URL)) return $path;
+            return url('storage/' . ltrim($path, '/'));
+        }, (array) $this->educational_certificates);
+    }
+
     protected $fillable = [
         'student_id',
         'name',
         'christian_name',
         'sex',
+        'birth_date',
         'age',
         'phone_number',
         'email_address',
@@ -38,11 +95,40 @@ class Student extends Model
         'section_id',
         'round',
         'educational_level',
+        'grade_level',
+        'occupation_type',
+        'current_school',
+        'current_office',
+        'family_guardian_name',
+        'family_guardian_phone',
+        'emergency_contact_name',
+        'emergency_contact_phone',
+        'picture',
+        'birth_certificates',
+        'educational_certificates',
+        'classification',
         'address_id',
         'status',        
         'is_verified',   
         'verified_by',   
         'verified_at', 
         'is_mezmur',
+        'is_mezmur_member',
+        'promotion_status',
+        'nominated_by',
+        'nominated_at',
+        'approved_by',
+        'approved_at',
+        'target_section_id',
+        'promotion_notes',
+    ];
+
+    protected $casts = [
+        'birth_date' => 'date',
+        'birth_certificates' => 'array',
+        'educational_certificates' => 'array',
+        'is_mezmur' => 'boolean',
+        'is_mezmur_member' => 'boolean',
+        'is_verified' => 'boolean',
     ];
 }

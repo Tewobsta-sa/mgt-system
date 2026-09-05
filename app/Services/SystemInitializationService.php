@@ -12,11 +12,13 @@ class SystemInitializationService
      */
     private static array $adminRoles = [
         'super_admin',
+        'yesew_habt',
+        'mereja_kfl',
+        'mezmur_kfl',
+        'tmhrt_kfl',
         'mezmur_office_admin',
         'tmhrt_office_admin',
-        'distance_admin',
         'gngnunet_office_admin',
-        'young_tmhrt_admin'
     ];
 
     /**
@@ -76,11 +78,10 @@ class SystemInitializationService
     {
         return [
             'super_admin' => 'Super Administrator (Full Access)',
-            'mezmur_office_admin' => 'Mezmur Office Administrator',
-            'tmhrt_office_admin' => 'TMHRT Office Administrator',
-            'distance_admin' => 'Distance Learning Administrator',
-            'gngnunet_office_admin' => 'Gngnunet Office Administrator',
-            'young_tmhrt_admin' => 'Young TMHRT Administrator'
+            'yesew_habt' => 'Yesew Habt (Student Registration, Attendance, Ministry)',
+            'mereja_kfl' => 'Mereja Kfl (System-wide View-Only Access)',
+            'mezmur_kfl' => 'Mezmur Kfl (Mezmur Schedules, Exams, Handoff)',
+            'tmhrt_kfl' => 'Tmhrt Kfl (Tmhrt Schedules, Courses, Grades, Teachers)',
         ];
     }
 

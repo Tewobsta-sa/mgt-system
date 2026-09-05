@@ -45,6 +45,8 @@ class AuthenticatedSessionController extends Controller
         $request->header('User-Agent')
     );
 
+    $user->load('roles');
+
     return response()->json([
         'user' => $user,
         'role' => $user->getRoleNames()->first() ?? 'unknown',
