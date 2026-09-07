@@ -288,6 +288,7 @@ class StudentController extends Controller
                 'email_address' => $request->input('email_address'),
                 'telegram_user_name' => $request->input('telegram_user_name'),
                 'classification' => $request->input('classification'),
+                'is_night' => $request->boolean('is_night'),
                 'status' => $request->input('status', 'new'),
                 'section_id' => $sectionId,
                 'picture' => $picturePath,
@@ -425,12 +426,12 @@ class StudentController extends Controller
                 'family_guardian_name', 'family_guardian_phone',
                 'emergency_contact_name', 'emergency_contact_phone',
                 'phone_number', 'email_address', 'telegram_user_name',
-                'classification', 'status', 'section_id', 'round'
+                'classification', 'status', 'section_id', 'round', 'is_night'
             ];
 
             foreach ($fields as $f) {
                 if ($request->has($f)) {
-                    $student->$f = $request->input($f);
+                    $student->$f = $f === 'is_night' ? $request->boolean('is_night') : $request->input($f);
                 }
             }
 
@@ -567,6 +568,9 @@ class StudentController extends Controller
                 'section_name' => $s->section?->name ?? 'Unassigned',
                 'track' => $s->section?->programType?->name ?? 'Regular',
                 'classification' => $s->classification ?? 'Regular',
+                'is_night' => (bool) $s->is_night,
+                'is_flagged' => (bool) $s->is_flagged,
+                'flag_reason' => $s->flag_reason,
                 'grade_level' => $s->grade_level ?? $s->educational_level ?? 'N/A',
                 'address_string' => implode(', ', $addrParts),
                 'phone_number' => $s->phone_number,
@@ -575,6 +579,7 @@ class StudentController extends Controller
                     'name' => $s->name,
                     'sec' => $s->section?->name,
                     'track' => $s->section?->programType?->name,
+                    'is_night' => (bool) $s->is_night,
                 ]),
             ];
         });
@@ -671,5 +676,56 @@ class StudentController extends Controller
         }
 
         return $query->orderBy('id', 'desc')->paginate(10);
+    }
+
+    // ------------------ STUDENT FLAGGING / RESTRICTION (Ye Sew Habt) ------------------
+
+    public function flagStudent(Request $request, $id)
+    {
+        $user = Auth::user();
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+            return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can flag students.'], 403);
+        }
+
+        $request->validate([
+            'reason' => 'required|string|min:2|max:1000',
+        ], [
+            'reason.required' => 'የእገዳ ወይም ማስታወሻ ምክንያት ማስገባት ግዴታ ነው (A reason is mandatory when flagging a student).',
+        ]);
+
+        $student = Student::findOrFail($id);
+        $student->is_flagged = true;
+        $student->flag_reason = $request->input('reason');
+        $student->flagged_by = $user->id;
+        $student->flagged_at = now();
+        // Flagged students are barred from Mezmur and ministries
+        $student->is_mezmur = false;
+        $student->is_mezmur_member = false;
+        $student->save();
+
+        return response()->json([
+            'message' => "ተማሪ {$student->name} በተሳካ ሁኔታ ታግዷል/ማስታወሻ ተይዟል። (Student successfully flagged).",
+            'student' => $student->load(['flagger:id,name', 'section.programType']),
+        ]);
+    }
+
+    public function unflagStudent(Request $request, $id)
+    {
+        $user = Auth::user();
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+            return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can unflag students.'], 403);
+        }
+
+        $student = Student::findOrFail($id);
+        $student->is_flagged = false;
+        $student->flag_reason = null;
+        $student->flagged_by = null;
+        $student->flagged_at = null;
+        $student->save();
+
+        return response()->json([
+            'message' => "የተማሪ {$student->name} እገዳ ተነስቷል። (Student restriction cleared).",
+            'student' => $student->load(['section.programType']),
+        ]);
     }
 }

@@ -40,6 +40,7 @@ class MinistryController extends Controller
                 SUM(CASE WHEN a.status IN ('Present','Excused') THEN 1 ELSE 0 END) as attended_sessions
             ")
             ->where('s.is_mezmur', true)
+            ->where('s.is_flagged', false)
             ->where('s.status', 'regular')
             ->where('s.status', '!=', 'new')
             ->where('asg.type', 'MezmurTraining')
@@ -397,7 +398,7 @@ class MinistryController extends Controller
     public function storeMinistry(Request $request)
     {
         $user = Auth::user();
-        if (!($user->hasRole('yesew_habt') || $user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin'))) {
+        if (!($user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin'))) {
             abort(403, 'Forbidden: Insufficient privileges to create ministry.');
         }
 
@@ -419,7 +420,7 @@ class MinistryController extends Controller
     public function updateMinistry(Request $request, $id)
     {
         $user = Auth::user();
-        if (!($user->hasRole('yesew_habt') || $user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!($user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin'))) {
             abort(403, 'Forbidden');
         }
 
@@ -442,7 +443,7 @@ class MinistryController extends Controller
     public function deleteMinistry($id)
     {
         $user = Auth::user();
-        if (!($user->hasRole('yesew_habt') || $user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!($user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin'))) {
             abort(403, 'Forbidden');
         }
 
@@ -458,7 +459,7 @@ class MinistryController extends Controller
     public function bulkAssignStudents(Request $request)
     {
         $user = Auth::user();
-        if (!($user->hasRole('yesew_habt') || $user->hasRole('super_admin') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('mezmur_kfl') || $user->hasRole('mezmur_office_admin'))) {
+        if (!($user->hasRole('yesew_habt') || $user->hasRole('super_admin'))) {
             abort(403, 'Forbidden');
         }
 
@@ -484,6 +485,35 @@ class MinistryController extends Controller
         }
 
         $ministry = Ministry::findOrFail($validated['ministry_id']);
+
+        $passedResults = MezmurExamResult::with('exam:id,ministry_id')
+            ->whereIn('student_id', $regularStudentIds)
+            ->where('status', 'passed')
+            ->where('sent_to_yesew_habt', true)
+            ->get();
+
+        $invalidStudentIds = $passedResults
+            ->filter(fn ($result) => (int) ($result->exam?->ministry_id ?? 0) !== (int) $ministry->id)
+            ->pluck('student_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        $studentsWithoutMatchingExam = array_values(array_diff(
+            $regularStudentIds,
+            $passedResults->filter(fn ($result) => (int) ($result->exam?->ministry_id ?? 0) === (int) $ministry->id)
+                ->pluck('student_id')
+                ->unique()
+                ->all()
+        ));
+
+        $invalidStudentIds = array_values(array_unique(array_merge($invalidStudentIds, $studentsWithoutMatchingExam)));
+        if (!empty($invalidStudentIds)) {
+            return response()->json([
+                'message' => 'Each student must have a forwarded passed exam linked to the selected ministry.',
+                'student_ids' => $invalidStudentIds,
+            ], 422);
+        }
 
         // Find or create an active MinistryAssignment for this ministry
         $assignment = MinistryAssignment::where('ministry_id', $ministry->id)->latest()->first();
@@ -537,6 +567,29 @@ class MinistryController extends Controller
             'count' => $count,
             'ministry' => $ministry,
             'assignment' => $assignment->load('ministry:id,name'),
+        ]);
+    }
+
+    public function getMinistryMembers($id)
+    {
+        $this->requireMezmurOfficeUser();
+        $ministry = Ministry::findOrFail($id);
+
+        $assignmentIds = $ministry->assignments()->pluck('id');
+        $studentIds = DB::table('ministry_assignment_students')
+            ->whereIn('ministry_assignment_id', $assignmentIds)
+            ->pluck('student_id');
+
+        $students = Student::with('section')
+            ->whereIn('id', $studentIds)
+            ->notFlagged()
+            ->orderBy('name')
+            ->get();
+
+        return response()->json([
+            'ministry' => $ministry,
+            'members' => $students,
+            'total' => $students->count(),
         ]);
     }
 }

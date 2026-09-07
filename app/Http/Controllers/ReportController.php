@@ -153,35 +153,71 @@ class ReportController extends Controller
 }
 
     /* -----------------------------------------
-     * ATTENDANCE EXPORT (SAFE)
+     * ATTENDANCE EXPORT (SAFE & COMPREHENSIVE)
      * ----------------------------------------- */
     private function exportAttendance(Request $request)
     {
         $headers = [
-            'Content-Type' => 'text/csv',
+            'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="attendance_report.csv"',
         ];
 
-        $attendance = Attendance::with([
-            'student',
-            'assignment'
-        ])->get();
+        $query = Attendance::with([
+            'student.section.programType',
+            'assignment.section.programType',
+            'assignment.assignmentCourses.course',
+            'assignment.mezmurs',
+        ]);
+
+        if ($sectionId = $request->input('section_id')) {
+            $query->where(function ($q) use ($sectionId) {
+                $q->whereHas('assignment', fn($qa) => $qa->where('section_id', $sectionId))
+                  ->orWhereHas('student', fn($qs) => $qs->where('section_id', $sectionId));
+            });
+        }
+
+        if ($type = $request->input('type')) {
+            $query->whereHas('assignment', fn($q) => $q->where('type', $type));
+        }
+
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
+
+        $attendance = $query->orderBy('marked_at', 'desc')->get();
 
         $callback = function () use ($attendance) {
             $file = fopen('php://output', 'w');
+            // Write UTF-8 BOM so Excel displays Amharic characters correctly
+            fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
             fputcsv($file, [
                 'Date',
-                'Student',
-                'Assignment',
+                'Student ID',
+                'Full Name',
+                'Christian Name',
+                'Section',
+                'Track / Classification',
+                'Assignment Type',
+                'Course / Topic',
                 'Status'
             ]);
 
             foreach ($attendance as $record) {
+                $secName = $record->assignment?->section?->name ?? $record->student?->section?->name ?? 'Unassigned';
+                $courseName = $record->assignment?->type === 'Course' 
+                    ? ($record->assignment?->assignmentCourses?->first()?->course?->name ?? 'Course')
+                    : ($record->assignment?->mezmurs?->first()?->title ?? 'Mezmur');
+
                 fputcsv($file, [
                     $record->marked_at ?? 'N/A',
-                    $record->student->name ?? 'Unknown',
-                    $record->assignment->type ?? 'Unknown',
+                    $record->student?->student_id ?? 'N/A',
+                    $record->student?->name ?? 'Unknown',
+                    $record->student?->christian_name ?? '',
+                    $secName,
+                    $record->student?->classification ?? $record->assignment?->section?->programType?->name ?? 'Regular',
+                    $record->assignment?->type ?? 'N/A',
+                    $courseName,
                     $record->status ?? 'Unknown'
                 ]);
             }

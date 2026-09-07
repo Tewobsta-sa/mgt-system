@@ -27,6 +27,7 @@ class StudentPromotionController extends Controller
             'section.programType',
             'targetSection',
             'nominator:id,name,username',
+            'endorser:id,name,username',
             'approver:id,name,username',
             'grades.assessment.course',
             'attendances.assignment',
@@ -44,9 +45,27 @@ class StudentPromotionController extends Controller
             });
         }
 
-        // Filter by promotion status tab (eligible, nominated, promoted, all)
+        $isSuperAdmin = $user->hasRole('super_admin');
+        $isTmhrt = $isSuperAdmin || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin');
+        $isYesew = $isSuperAdmin || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin');
+
+        // Filter by promotion status tab (eligible, nominated_tmhrt, endorsed_yesew, promoted, all)
         if ($request->filled('promotion_status') && $request->promotion_status !== 'all') {
-            $query->where('promotion_status', $request->promotion_status);
+            $st = $request->promotion_status;
+            if ($st === 'eligible') {
+                $query->where(function ($q) {
+                    $q->where('promotion_status', 'eligible')->orWhereNull('promotion_status');
+                });
+            } elseif ($st === 'nominated_tmhrt' || $st === 'nominated') {
+                $query->whereIn('promotion_status', ['nominated_tmhrt', 'nominated']);
+            } else {
+                $query->where('promotion_status', $st);
+            }
+        } elseif (!$request->filled('promotion_status')) {
+            // Yesew Habt without filter only sees candidates sent by Tmhrt Kfl
+            if ($user->hasRole('yesew_habt') && !$isSuperAdmin && !$user->hasRole('tmhrt_kfl')) {
+                $query->whereIn('promotion_status', ['nominated_tmhrt', 'nominated', 'endorsed_yesew']);
+            }
         }
 
         // Search by name or student ID
@@ -178,6 +197,15 @@ class StudentPromotionController extends Controller
                 ? round((($mezmurSessions['present'] + ($mezmurSessions['excused'] * 0.5)) / $mezmurSessions['total']) * 100, 1)
                 : null;
 
+            $isEligible = $overallGradeAvg !== null
+                && $overallGradeAvg >= 50
+                && $overallAttendanceAvg !== null
+                && $overallAttendanceAvg >= 70;
+
+            if ($request->input('promotion_status') === 'eligible' && !$isEligible) {
+                continue;
+            }
+
             // 3. Next Section Auto-Resolution
             $currentSection = $student->section;
             $nextSection = null;
@@ -236,6 +264,12 @@ class StudentPromotionController extends Controller
                 }
             }
 
+            $promotionStatus = in_array($student->promotion_status, ['nominated_tmhrt', 'nominated'])
+                ? 'nominated_tmhrt'
+                : (in_array($student->promotion_status, ['endorsed_yesew', 'promoted'])
+                    ? $student->promotion_status
+                    : ($isEligible ? 'eligible' : 'ineligible'));
+
             $candidates[] = [
                 'id' => $student->id,
                 'student_id' => $student->student_id,
@@ -251,6 +285,13 @@ class StudentPromotionController extends Controller
                 'overall_grade_avg' => $overallGradeAvg,
                 'courses_breakdown' => $coursesBreakdown,
                 'has_grades' => count($coursesBreakdown) > 0,
+                'is_eligible' => $isEligible,
+                'eligibility_reasons' => [
+                    'has_results' => $overallGradeAvg !== null,
+                    'grade_passed' => $overallGradeAvg !== null && $overallGradeAvg >= 50,
+                    'has_attendance' => $overallAttendanceAvg !== null,
+                    'attendance_passed' => $overallAttendanceAvg !== null && $overallAttendanceAvg >= 70,
+                ],
                 
                 // Dynamic Attendance Evaluation
                 'overall_attendance_avg' => $overallAttendanceAvg,
@@ -267,7 +308,7 @@ class StudentPromotionController extends Controller
                 'session_logs' => array_slice(array_reverse($sessionLogs), 0, 10),
                 
                 // Promotion Workflow State
-                'promotion_status' => $student->promotion_status ?? 'eligible',
+                'promotion_status' => $promotionStatus,
                 'is_verified' => (bool) $student->is_verified,
                 'target_section_id' => $student->target_section_id,
                 'next_section' => $nextSection,
@@ -275,16 +316,24 @@ class StudentPromotionController extends Controller
                 'promotion_notes' => $student->promotion_notes,
                 'nominator' => $student->nominator ? $student->nominator->name : null,
                 'nominated_at' => $student->nominated_at ? date('Y-m-d H:i', strtotime($student->nominated_at)) : null,
+                'endorser' => $student->endorser ? $student->endorser->name : null,
+                'endorsed_at' => $student->endorsed_at ? date('Y-m-d H:i', strtotime($student->endorsed_at)) : null,
+                'endorsement_notes' => $student->endorsement_notes,
                 'approver' => $student->approver ? $student->approver->name : null,
                 'approved_at' => $student->approved_at ? date('Y-m-d H:i', strtotime($student->approved_at)) : null,
             ];
         }
 
         // Summary counts across all students
+        $eligibleCount = $request->input('promotion_status') === 'eligible'
+            ? count($candidates)
+            : Student::where('promotion_status', 'eligible')->orWhereNull('promotion_status')->count();
+
         $stats = [
             'total_students' => Student::count(),
-            'eligible_count' => Student::where('promotion_status', 'eligible')->orWhereNull('promotion_status')->count(),
-            'nominated_count' => Student::where('promotion_status', 'nominated')->count(),
+            'eligible_count' => $eligibleCount,
+            'nominated_count' => Student::whereIn('promotion_status', ['nominated_tmhrt', 'nominated'])->count(),
+            'endorsed_count' => Student::where('promotion_status', 'endorsed_yesew')->count(),
             'promoted_count' => Student::where('promotion_status', 'promoted')->count(),
         ];
 
@@ -304,7 +353,8 @@ class StudentPromotionController extends Controller
     }
 
     /**
-     * 🎓 Nominate candidates for promotion (Exclusively for Tmhrt Admin / Super Admin)
+     * 🎓 Level 1: Nominate candidates for promotion (Exclusively for Tmhrt Admin / Super Admin)
+     * Mandatory Attendance requirement: >= 70%
      */
     public function nominate(Request $request)
     {
@@ -322,11 +372,34 @@ class StudentPromotionController extends Controller
             'notes' => 'nullable|string|max:500',
         ]);
 
-        $students = Student::with('section')->whereIn('id', $request->student_ids)->get();
+        $students = Student::with(['section', 'attendances', 'grades.assessment'])->whereIn('id', $request->student_ids)->get();
         $targetSectionId = $request->target_section_id;
-
-        // Auto-resolve next section if none explicitly specified
         $allSections = Section::orderBy('order_no')->get();
+
+        // Enforce the same live eligibility rule shown on the Tmhrt screen.
+        foreach ($students as $student) {
+            $totalAtt = $student->attendances->count();
+            $attendancePct = $totalAtt > 0
+                ? (($student->attendances->where('status', 'Present')->count() + ($student->attendances->where('status', 'Excused')->count() * 0.5)) / $totalAtt) * 100
+                : null;
+
+            $totalWeight = 0;
+            $weightedScore = 0;
+            foreach ($student->grades as $grade) {
+                $assessment = $grade->assessment;
+                if (!$assessment || (float) $assessment->max_score <= 0) continue;
+                $weight = (float) ($assessment->weight ?: 100);
+                $weightedScore += ((float) $grade->score / (float) $assessment->max_score) * $weight;
+                $totalWeight += $weight;
+            }
+            $gradePct = $totalWeight > 0 ? ($weightedScore / $totalWeight) * 100 : null;
+
+            if ($gradePct === null || $gradePct < 50 || $attendancePct === null || $attendancePct < 70) {
+                return response()->json([
+                    'message' => "Student {$student->name} must have results of at least 50% and attendance of at least 70% before nomination."
+                ], 422);
+            }
+        }
 
         DB::transaction(function () use ($students, $targetSectionId, $allSections, $user, $request) {
             foreach ($students as $student) {
@@ -340,7 +413,7 @@ class StudentPromotionController extends Controller
                     $resolvedTargetId = $nextSec?->id;
                 }
 
-                $student->promotion_status = 'nominated';
+                $student->promotion_status = 'nominated_tmhrt';
                 $student->target_section_id = $resolvedTargetId;
                 $student->nominated_by = $user->id;
                 $student->nominated_at = now();
@@ -352,20 +425,66 @@ class StudentPromotionController extends Controller
         });
 
         return response()->json([
-            'message' => count($students) . ' student(s) successfully nominated for promotion by Tmhrt Admin. Awaiting Ye Sew Habt approval.',
+            'message' => count($students) . ' student(s) successfully nominated (Level 1) by Tmhrt Admin. Sent to Ye Sew Habt for review.',
             'count' => count($students),
         ]);
     }
 
     /**
-     * 🏆 Approve candidates and advance their grade (Exclusively for Ye Sew Habt / Super Admin)
+     * 👥 Level 2: Endorse candidates (Exclusively for Ye Sew Habt / Super Admin)
      */
-    public function approve(Request $request)
+    public function endorse(Request $request)
     {
         $user = Auth::user();
         if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
             return response()->json([
-                'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can approve student promotions.'
+                'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can endorse student promotions.'
+            ], 403);
+        }
+
+        $request->validate([
+            'student_ids' => 'required|array|min:1',
+            'student_ids.*' => 'exists:students,id',
+            'notes' => 'nullable|string|max:500',
+        ]);
+
+        $students = Student::whereIn('id', $request->student_ids)
+            ->whereIn('promotion_status', ['nominated_tmhrt', 'nominated'])
+            ->get();
+
+        if ($students->isEmpty()) {
+            return response()->json([
+                'message' => 'No nominated candidates found for endorsement. Candidates must first be nominated by Tmhrt Admin.'
+            ], 422);
+        }
+
+        DB::transaction(function () use ($students, $user, $request) {
+            foreach ($students as $student) {
+                $student->promotion_status = 'endorsed_yesew';
+                $student->endorsed_by = $user->id;
+                $student->endorsed_at = now();
+                if ($request->filled('notes')) {
+                    $student->endorsement_notes = $request->notes;
+                }
+                $student->save();
+            }
+        });
+
+        return response()->json([
+            'message' => count($students) . ' student(s) successfully endorsed (Level 2) by Ye Sew Habt. Sent to Super Admin for final approval.',
+            'count' => count($students),
+        ]);
+    }
+
+    /**
+     * 👑 Level 3: Final Official Approval & Grade Advancement (Strictly for Super Admin!)
+     */
+    public function approve(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user || !$user->hasRole('super_admin')) {
+            return response()->json([
+                'message' => 'Forbidden: Only the Super Admin (የበላይ አስተዳዳሪ) has the authority to execute final promotion approval and section advancement.'
             ], 403);
         }
 
@@ -377,12 +496,12 @@ class StudentPromotionController extends Controller
 
         $students = Student::with(['section', 'targetSection'])
             ->whereIn('id', $request->student_ids)
-            ->where('promotion_status', 'nominated')
+            ->where('promotion_status', 'endorsed_yesew')
             ->get();
 
         if ($students->isEmpty()) {
             return response()->json([
-                'message' => 'No nominated students found for approval. Students must first be nominated by Tmhrt Admin.'
+                'message' => 'No endorsed candidates found for final approval. Candidates must first be nominated by Tmhrt Admin and endorsed by Ye Sew Habt.'
             ], 422);
         }
 
@@ -394,7 +513,6 @@ class StudentPromotionController extends Controller
                         $student->grade_level = $student->targetSection->name;
                     }
                 } else {
-                    // Final level => graduated
                     $student->status = 'Graduated';
                     $student->section_id = null;
                 }
@@ -404,27 +522,27 @@ class StudentPromotionController extends Controller
                 $student->approved_by = $user->id;
                 $student->approved_at = now();
                 if ($request->filled('notes')) {
-                    $student->promotion_notes = ($student->promotion_notes ? $student->promotion_notes . ' | ' : '') . 'Approved: ' . $request->notes;
+                    $student->promotion_notes = ($student->promotion_notes ? $student->promotion_notes . ' | ' : '') . 'Final Approval: ' . $request->notes;
                 }
                 $student->save();
             }
         });
 
         return response()->json([
-            'message' => count($students) . ' student(s) officially approved and promoted to their next grade level by Ye Sew Habt!',
+            'message' => count($students) . ' student(s) officially approved and promoted to their next grade level by Super Admin!',
             'count' => count($students),
         ]);
     }
 
     /**
-     * ↩️ Reject or return nomination back to Tmhrt Admin (Ye Sew Habt / Super Admin)
+     * ↩️ Reject or return nomination back to eligible (Super Admin, Ye Sew Habt, or Tmhrt Admin)
      */
     public function reject(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin'))) {
             return response()->json([
-                'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) can reject or return nominations.'
+                'message' => 'Forbidden: Your role cannot reject or return nominations.'
             ], 403);
         }
 
@@ -436,17 +554,20 @@ class StudentPromotionController extends Controller
 
         $students = Student::whereIn('id', $request->student_ids)->get();
 
-        DB::transaction(function () use ($students, $request) {
+        DB::transaction(function () use ($students, $user, $request) {
             foreach ($students as $student) {
                 $student->promotion_status = 'eligible';
                 $student->target_section_id = null;
-                $student->promotion_notes = 'Returned by Ye Sew Habt: ' . $request->reason;
+                $student->endorsed_by = null;
+                $student->endorsed_at = null;
+                $student->endorsement_notes = null;
+                $student->promotion_notes = 'Reset by ' . $user->name . ': ' . $request->reason;
                 $student->save();
             }
         });
 
         return response()->json([
-            'message' => count($students) . ' student nomination(s) returned to Tmhrt Admin.',
+            'message' => count($students) . ' candidate(s) reset back to eligible status.',
             'count' => count($students),
         ]);
     }

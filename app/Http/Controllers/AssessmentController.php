@@ -52,13 +52,6 @@ class AssessmentController extends Controller
             'type'      => ['nullable','string','max:100']
         ]);
 
-        // Keep grading model consistent: component weight defines max score.
-        // Example: weight 30 => this component is marked out of 30.
-        $data['max_score'] = (int) round((float) $data['weight']);
-        if ($data['max_score'] < 1) {
-            return response()->json(['message' => 'Assessment weight must be at least 1'], 422);
-        }
-
         $assessment = null;
         DB::transaction(function() use ($data, &$assessment) {
             $assessment = Assessment::create($data);
@@ -86,11 +79,6 @@ class AssessmentController extends Controller
             'weight'    => ['required','numeric','min:0','max:100'],
             'type'      => ['nullable','string','max:100']
         ]);
-
-        $data['max_score'] = (int) round((float) $data['weight']);
-        if ($data['max_score'] < 1) {
-            return response()->json(['message' => 'Assessment weight must be at least 1'], 422);
-        }
 
         DB::transaction(function() use ($assessment, $data) {
             $assessment->update($data);

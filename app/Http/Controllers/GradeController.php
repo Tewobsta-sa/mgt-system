@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 use App\Models\Grade;
 use App\Models\Assessment;
 use App\Models\Student;
+use App\Models\Assignment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -29,8 +30,9 @@ class GradeController extends Controller
 
         $saved = [];
         $errors = [];
+        $user = Auth::user();
 
-        DB::transaction(function () use ($data, &$saved, &$errors) {
+        DB::transaction(function () use ($data, &$saved, &$errors, $user) {
             $assessmentCache = [];
 
             foreach ($data['grades'] as $i => $row) {
@@ -39,6 +41,15 @@ class GradeController extends Controller
 
                 if (! $assessment) {
                     $errors[] = ['index' => $i, 'message' => 'Assessment not found'];
+                    continue;
+                }
+
+                if ($user->hasRole('teacher') && ! $this->teacherCanGrade(
+                    $user,
+                    $assessment->course_id,
+                    $row['student_id']
+                )) {
+                    $errors[] = ['index' => $i, 'message' => 'You can only enter grades for your assigned course sections'];
                     continue;
                 }
 
@@ -108,7 +119,7 @@ class GradeController extends Controller
         return response()->json(['message' => 'Unauthorized'], 401);
     }
 
-    if (!($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
+    if (!($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
         return response()->json(['message' => 'Forbidden'], 403);
     }
 
@@ -120,15 +131,12 @@ class GradeController extends Controller
 
     $assessment = Assessment::findOrFail($data['assessment_id']);
 
-    // 🔒 Teacher can only grade own course
-    if ($user->hasRole('teacher')) {
-        $teacherCourseIds = \App\Models\AssignmentCourse::where('teacher_id', $user->id)
-            ->pluck('course_id')
-            ->toArray();
-
-        if (!in_array($assessment->course_id, $teacherCourseIds)) {
+    if ($user->hasRole('teacher') && ! $this->teacherCanGrade(
+        $user,
+        $assessment->course_id,
+        $data['student_id']
+    )) {
             return response()->json(['message' => 'Forbidden'], 403);
-        }
     }
 
     if ($data['score'] > $assessment->max_score) {
@@ -183,11 +191,17 @@ class GradeController extends Controller
     public function destroy($id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('tmhrt_office_admin') || $user->hasRole('teacher'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
             return response()->json(['message' => 'Forbidden: You can only view grades with your role.'], 403);
         }
 
         $grade = Grade::findOrFail($id);
+        if ($user->hasRole('teacher')) {
+            $grade->load('assessment');
+            if (! $this->teacherCanGrade($user, $grade->assessment->course_id, $grade->student_id)) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+        }
         $grade->delete();
         return response()->json(null, 204);
     }
@@ -230,6 +244,24 @@ class GradeController extends Controller
             'course_total' => $course_total,
             'course_percentage' => $course_percentage
         ];
+    }
+
+    protected function teacherCanGrade($user, $courseId, $studentId): bool
+    {
+        $studentSectionId = Student::whereKey($studentId)->value('section_id');
+
+        return Assignment::where('type', 'Course')
+            ->where('section_id', $studentSectionId)
+            ->where(function ($query) use ($user) {
+                $query->where('user_id', $user->id)
+                    ->orWhereHas('assignmentCourses', fn ($assignmentCourse) =>
+                        $assignmentCourse->where('teacher_id', $user->id)
+                    );
+            })
+            ->whereHas('assignmentCourses', fn ($assignmentCourse) =>
+                $assignmentCourse->where('course_id', $courseId)
+            )
+            ->exists();
     }
 
     // Add this method inside your GradeController class

@@ -98,16 +98,29 @@ class TeacherController extends Controller
             $sectionIds = $sectionIds->intersect($teacherSectionIds);
         }
 
-        if ($sectionId) {
-            if (! $sectionIds->contains((int) $sectionId)) {
-                return response()->json(['message' => 'Forbidden or section not part of this course'], 403);
+        $isAdmin = $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin') || $user->hasRole('yesew_habt');
+
+        if ($isAdmin) {
+            if ($sectionId) {
+                $filterIds = [(int) $sectionId];
+            } elseif ($sectionIds->isNotEmpty()) {
+                $filterIds = $sectionIds->values()->all();
+            } elseif ($course->program_type_id) {
+                $filterIds = \App\Models\Section::where('program_type_id', $course->program_type_id)->pluck('id')->all();
+            } else {
+                $filterIds = \App\Models\Section::pluck('id')->all();
             }
-            $filterIds = [(int) $sectionId];
         } else {
-            $filterIds = $sectionIds->values()->all();
+            if ($sectionId) {
+                $filterIds = [(int) $sectionId];
+            } else {
+                $filterIds = $sectionIds->values()->all();
+            }
         }
 
-        $students = Student::with([
+        // Flagged students are excluded from Tmhrt course participation
+        $students = Student::notFlagged()
+            ->with([
                 'section.programType',
                 'grades' => fn ($q) => $q->whereHas('assessment', fn ($qq) => $qq->where('course_id', $course->id)),
             ])

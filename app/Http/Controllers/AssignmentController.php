@@ -201,15 +201,9 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
-            // Check that section and course program types match
-            if ($section->program_type_id !== $course->program_type_id) {
+            // Check that section and course program types match if both specified
+            if ($section->program_type_id && $course->program_type_id && $section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
-            }
-
-            // Check that teacher's program types include the course/section program type
-            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('program_types.id')->toArray();
-            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
-                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(
@@ -364,10 +358,10 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+        if ($assignment->type === 'Course' && !($user->hasRole('tmhrt_office_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('super_admin'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !($user->hasRole('mezmur_office_admin') || $user->hasRole('mezmur_kfl') || $user->hasRole('super_admin'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -425,15 +419,9 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
-            // Check that section and course program types match
-            if ($section->program_type_id !== $course->program_type_id) {
+            // Check that section and course program types match if both specified
+            if ($section->program_type_id && $course->program_type_id && $section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
-            }
-
-            // Check that teacher's program types include the course/section program type
-            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('program_types.id')->toArray();
-            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
-                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(

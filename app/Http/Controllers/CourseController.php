@@ -20,7 +20,8 @@ class CourseController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'credit_hour' => 'required|integer|min:1',
-            'duration' => 'required|integer|min:1',
+            'duration' => 'nullable|integer|min:1',
+            'semester' => 'nullable|string|max:100',
             'program_type_name' => 'required|string|exists:program_types,name',
             'assessments' => 'nullable|array',
             'assessments.*.title' => 'required_with:assessments|string|max:255',
@@ -37,7 +38,8 @@ class CourseController extends Controller
             $course = Course::create([
                 'name' => $validated['name'],
                 'credit_hour' => $validated['credit_hour'],
-                'duration' => $validated['duration'],
+                'duration' => $validated['duration'] ?? 16,
+                'semester' => $validated['semester'] ?? null,
                 'program_type_id' => $programType->id,
             ]);
 
@@ -66,28 +68,35 @@ class CourseController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
             'credit_hour' => 'sometimes|required|integer|min:1',
-            'duration' => 'sometimes|required|integer|min:1',
+            'duration' => 'nullable|integer|min:1',
+            'semester' => 'nullable|string|max:100',
             'program_type_name' => 'sometimes|required|string|exists:program_types,name',
-            'assessments' => 'nullable|array',
-            'assessments.*.id' => 'nullable|integer|exists:assessments,id',
+            'assessments' => 'sometimes|nullable|array',
+            'assessments.*.id' => 'nullable|integer',
             'assessments.*.title' => 'required_with:assessments|string|max:255',
             'assessments.*.max_score' => 'required_with:assessments|integer|min:1',
             'assessments.*.weight' => 'required_with:assessments|numeric|min:0|max:100',
             'assessments.*.type' => 'nullable|string|max:100',
         ]);
 
-        if (array_key_exists('assessments', $validated)) {
-            $this->assertWeightsSumCorrect($validated['assessments'] ?? []);
+        if (isset($validated['assessments'])) {
+            $this->assertWeightsSumCorrect($validated['assessments']);
         }
 
+        $programType = null;
         if (isset($validated['program_type_name'])) {
             $programType = ProgramType::where('name', $validated['program_type_name'])->first();
-            $validated['program_type_id'] = $programType->id;
-            unset($validated['program_type_name']);
         }
 
-        DB::transaction(function () use ($validated, $course) {
-            $course->update(collect($validated)->except('assessments')->toArray());
+        DB::transaction(function () use ($validated, $course, $programType) {
+            $fields = [];
+            if (isset($validated['name'])) $fields['name'] = $validated['name'];
+            if (isset($validated['credit_hour'])) $fields['credit_hour'] = $validated['credit_hour'];
+            if (array_key_exists('duration', $validated)) $fields['duration'] = $validated['duration'] ?? 16;
+            if (array_key_exists('semester', $validated)) $fields['semester'] = $validated['semester'];
+            if ($programType) $fields['program_type_id'] = $programType->id;
+
+            $course->update($fields);
 
             if (array_key_exists('assessments', $validated)) {
                 $keepIds = [];

@@ -10,6 +10,7 @@ use App\Services\AdminManagementService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use App\Models\RefreshToken;
 
 class RegisteredUserController extends Controller
 {
@@ -44,24 +45,14 @@ class RegisteredUserController extends Controller
                 return response()->json(['error' => 'Unauthenticated user'], 401);
             }
 
-            $currentRole = $user->getRoleNames()->first();
             $targetRole = $request->role;
 
-            $allowedRoles = $this->allowedToRegister($currentRole);
-
-            if (!in_array($targetRole, $allowedRoles)) {
-                return response()->json(['error' => 'You are not allowed to register this role'], 403);
+            if ($targetRole === 'teacher' && !$user->hasRole('tmhrt_kfl')) {
+                return response()->json(['error' => 'Only the Tmhrt Kfl can register teachers'], 403);
             }
 
-            // If role is teacher, check program type restrictions
-            if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
-                $allowedProgramTypeIds = $this->allowedProgramTypeIdsForAdmin($currentRole);
-
-                foreach ($request->program_type_ids as $ptId) {
-                    if (!in_array($ptId, $allowedProgramTypeIds)) {
-                        return response()->json(['error' => 'You cannot assign this program type'], 403);
-                    }
-                }
+            if ($targetRole !== 'teacher' && !$user->hasRole('super_admin')) {
+                return response()->json(['error' => 'Only the Super Admin can register this role'], 403);
             }
 
             $user = User::create([
@@ -92,6 +83,7 @@ class RegisteredUserController extends Controller
     private function allowedToRegister($role)
     {
         return match ($role) {
+            'tmhrt_kfl' => ['teacher'],
             'mezmur_office_admin' => ['mezmur_office_coordinator'],
             'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
             'young_tmhrt_admin' => ['teacher'],  // assuming young admin role added
@@ -149,10 +141,33 @@ class RegisteredUserController extends Controller
             return response()->json(['error' => 'Incorrect security answer'], 403);
         }
 
+        // Store the same hash format used by the login verifier.
         $user->password = Hash::make($request->new_password);
         $user->save();
 
+        $user->refresh();
+        if (!Hash::check($request->new_password, $user->password)) {
+            return response()->json(['error' => 'Password reset could not be verified'], 500);
+        }
+
+        // Force all existing sessions to authenticate with the new password.
+        $user->tokens()->delete();
+        RefreshToken::revokeAllForUser($user);
+
         return response()->json(['message' => 'Password reset successful'], 200);
+    }
+
+    public function securityQuestion(Request $request)
+    {
+        $request->validate([
+            'username' => 'required|string|exists:users,username',
+        ]);
+
+        $user = User::where('username', $request->username)->firstOrFail();
+
+        return response()->json([
+            'security_question' => $user->security_question,
+        ]);
     }
 
     public function update(Request $request)

@@ -181,7 +181,8 @@ class StudentGradeController extends Controller
      */
     public function sectionReportCards($sectionId)
     {
-        $students = Student::with(['address', 'section.programType'])
+        $students = Student::notFlagged()
+            ->with(['address', 'section.programType'])
             ->where('section_id', $sectionId)
             ->get();
 
@@ -197,6 +198,16 @@ class StudentGradeController extends Controller
             ->pluck('course_id');
 
         $courses = Course::with('assessments')->whereIn('id', $courseIds)->get();
+
+        // Fallback to program type courses if assignment not explicitly mapped yet
+        if ($courses->isEmpty()) {
+            $section = \App\Models\Section::find($sectionId);
+            if ($section && $section->program_type_id) {
+                $courses = Course::with('assessments')
+                    ->where('program_type_id', $section->program_type_id)
+                    ->get();
+            }
+        }
 
         $allReports = [];
 

@@ -46,9 +46,24 @@ class Student extends Model
         return $this->belongsTo(User::class, 'approved_by');
     }
 
+    public function endorser()
+    {
+        return $this->belongsTo(User::class, 'endorsed_by');
+    }
+
+    public function flagger()
+    {
+        return $this->belongsTo(User::class, 'flagged_by');
+    }
+
     public function targetSection()
     {
         return $this->belongsTo(Section::class, 'target_section_id');
+    }
+
+    public function scopeNotFlagged($query)
+    {
+        return $query->where('is_flagged', false);
     }
 
     protected $appends = [
@@ -61,7 +76,8 @@ class Student extends Model
     {
         if (!$this->picture) return null;
         if (filter_var($this->picture, FILTER_VALIDATE_URL)) return $this->picture;
-        return url('storage/' . ltrim($this->picture, '/'));
+        // Serve via /api/media so the SPA (different origin) can use photos in canvas/PDF
+        return url('api/media/' . ltrim($this->picture, '/'));
     }
 
     public function getBirthCertificatesUrlsAttribute()
@@ -107,8 +123,13 @@ class Student extends Model
         'birth_certificates',
         'educational_certificates',
         'classification',
+        'is_night',
         'address_id',
         'status',        
+        'is_flagged',
+        'flag_reason',
+        'flagged_by',
+        'flagged_at',
         'is_verified',   
         'verified_by',   
         'verified_at', 
@@ -117,6 +138,9 @@ class Student extends Model
         'promotion_status',
         'nominated_by',
         'nominated_at',
+        'endorsed_by',
+        'endorsed_at',
+        'endorsement_notes',
         'approved_by',
         'approved_at',
         'target_section_id',
@@ -130,5 +154,7 @@ class Student extends Model
         'is_mezmur' => 'boolean',
         'is_mezmur_member' => 'boolean',
         'is_verified' => 'boolean',
+        'is_flagged' => 'boolean',
+        'is_night' => 'boolean',
     ];
 }

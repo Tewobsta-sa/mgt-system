@@ -20,8 +20,16 @@ class MezmurExamController extends Controller
         $exams = MezmurExam::with(['creator:id,name', 'ministry:id,name,location,ministry_date'])
             ->withCount([
                 'results',
-                'results as passed_count' => fn($q) => $q->where('status', 'passed'),
-                'results as failed_count' => fn($q) => $q->where('status', 'failed'),
+                'results as passed_count' => fn($q) => $q
+                    ->where('status', 'passed')
+                    ->whereHas('student', fn($student) => $student
+                        ->where('status', 'regular')
+                        ->where('status', '!=', 'new')),
+                'results as failed_count' => fn($q) => $q
+                    ->where('status', 'failed')
+                    ->whereHas('student', fn($student) => $student
+                        ->where('status', 'regular')
+                        ->where('status', '!=', 'new')),
                 'results as sent_count' => fn($q) => $q->where('sent_to_yesew_habt', true),
             ])
             ->orderBy('exam_date', 'desc')
@@ -68,7 +76,8 @@ class MezmurExamController extends Controller
      */
     public function getAttendees(Request $request)
     {
-        $query = Student::with('section')
+        $query = Student::notFlagged()
+            ->with('section')
             ->where('status', 'regular')
             ->where('status', '!=', 'new');
 
@@ -175,6 +184,12 @@ class MezmurExamController extends Controller
         $query = MezmurExamResult::with(['student.section', 'student.address', 'exam.ministry:id,name,location,ministry_date'])
             ->where('sent_to_yesew_habt', true)
             ->where('status', 'passed')
+            ->whereNotExists(function ($subquery) {
+                $subquery->select(DB::raw(1))
+                    ->from('ministry_assignment_students as mas')
+                    ->join('ministry_assignments as ma', 'ma.id', '=', 'mas.ministry_assignment_id')
+                    ->whereColumn('mas.student_id', 'mezmur_exam_results.student_id');
+            })
             ->whereHas('student', function ($q) {
                 $q->where('status', 'regular')
                   ->where('status', '!=', 'new');
