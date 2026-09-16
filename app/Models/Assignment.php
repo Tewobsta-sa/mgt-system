@@ -9,8 +9,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Assignment extends Model
 {
     protected $fillable = [
-        'type', 'section_id', 'trainer_id', 'user_id',
+        'type', 'is_night', 'section_id', 'trainer_id', 'user_id',
         'location', 'day_of_week','scheduled_date', 'start_time', 'end_time', 'active'
+    ];
+
+    protected $casts = [
+        'is_night' => 'boolean',
+        'active' => 'boolean',
     ];
 
     public function section()

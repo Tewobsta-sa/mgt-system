@@ -46,8 +46,8 @@ class StudentPromotionController extends Controller
         }
 
         $isSuperAdmin = $user->hasRole('super_admin');
-        $isTmhrt = $isSuperAdmin || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin');
-        $isYesew = $isSuperAdmin || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin');
+        $isTmhrt = $isSuperAdmin || $user->hasRole('tmhrt_kfl');
+        $isYesew = $isSuperAdmin || $user->hasRole('yesew_habt');
 
         // Filter by promotion status tab (eligible, nominated_tmhrt, endorsed_yesew, promoted, all)
         if ($request->filled('promotion_status') && $request->promotion_status !== 'all') {
@@ -78,16 +78,40 @@ class StudentPromotionController extends Controller
             });
         }
 
-        $students = $query->orderBy('name', 'asc')->get();
+        $perPage = $request->input('per_page', $request->input('limit', null));
+        if ($perPage && is_numeric($perPage)) {
+            $students = $query->orderBy('name', 'asc')->paginate((int) $perPage);
+        } else {
+            $students = $query->orderBy('name', 'asc')->get();
+        }
 
         // Fetch all sections grouped by program type for next-section resolution
         $programTypes = ProgramType::with(['sections' => fn($q) => $q->orderBy('order_no')])->get()->keyBy('id');
         $programTypesByName = $programTypes->keyBy('name');
 
+        // Pre-fetch courses assigned to the students' current sections to avoid historical grade pollution
+        $sectionIds = $students->pluck('section_id')->filter()->unique();
+        $sectionCourseMap = [];
+        if ($sectionIds->isNotEmpty()) {
+            $assignments = \App\Models\Assignment::whereIn('section_id', $sectionIds)
+                ->where('type', 'Course')
+                ->with('assignmentCourses')
+                ->get();
+            foreach ($assignments as $asn) {
+                foreach ($asn->assignmentCourses as $ac) {
+                    $sectionCourseMap[$asn->section_id][$ac->course_id] = true;
+                }
+            }
+        }
+
         $candidates = [];
 
         foreach ($students as $student) {
-            // 1. Calculate Grade & Academic Performance
+            // 1. Calculate Grade & Academic Performance strictly scoped to current section
+            $currentSectionCourses = $student->section_id && isset($sectionCourseMap[$student->section_id])
+                ? array_keys($sectionCourseMap[$student->section_id])
+                : null;
+
             $courseScores = [];
             $allAssessments = [];
             $totalEarnedPoints = 0;
@@ -98,6 +122,12 @@ class StudentPromotionController extends Controller
                 if (!$assessment || !$assessment->course) continue;
 
                 $courseId = $assessment->course_id;
+
+                // Only evaluate courses assigned to the student's current section if assignments exist
+                if ($currentSectionCourses !== null && !empty($currentSectionCourses) && !in_array($courseId, $currentSectionCourses)) {
+                    continue;
+                }
+
                 $courseName = $assessment->course->name;
 
                 if (!isset($courseScores[$courseId])) {
@@ -340,16 +370,27 @@ class StudentPromotionController extends Controller
         // All sections for dropdown selection
         $allSections = Section::with('programType')->orderBy('program_type_id')->orderBy('order_no')->get();
 
-        return response()->json([
+        $response = [
             'candidates' => $candidates,
             'stats' => $stats,
             'sections' => $allSections,
             'user_role' => [
                 'is_super_admin' => $user->hasRole('super_admin'),
-                'is_tmhrt' => $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin'),
-                'is_yesew_habt' => $user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'),
+                'is_tmhrt' => $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'),
+                'is_yesew_habt' => $user->hasRole('super_admin') || $user->hasRole('yesew_habt'),
             ],
-        ]);
+        ];
+
+        if ($students instanceof \Illuminate\Pagination\LengthAwarePaginator) {
+            $response['meta'] = [
+                'current_page' => $students->currentPage(),
+                'last_page' => $students->lastPage(),
+                'per_page' => $students->perPage(),
+                'total' => $students->total(),
+            ];
+        }
+
+        return response()->json($response);
     }
 
     /**
@@ -359,7 +400,7 @@ class StudentPromotionController extends Controller
     public function nominate(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
             return response()->json([
                 'message' => 'Forbidden: Only Tmhrt Admin (ትምህርት ክፍል) or Super Admin can nominate students for promotion.'
             ], 403);
@@ -436,7 +477,7 @@ class StudentPromotionController extends Controller
     public function endorse(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
             return response()->json([
                 'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can endorse student promotions.'
             ], 403);
@@ -540,7 +581,7 @@ class StudentPromotionController extends Controller
     public function reject(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('tmhrt_kfl'))) {
             return response()->json([
                 'message' => 'Forbidden: Your role cannot reject or return nominations.'
             ], 403);

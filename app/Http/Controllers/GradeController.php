@@ -44,12 +44,8 @@ class GradeController extends Controller
                     continue;
                 }
 
-                if ($user->hasRole('teacher') && ! $this->teacherCanGrade(
-                    $user,
-                    $assessment->course_id,
-                    $row['student_id']
-                )) {
-                    $errors[] = ['index' => $i, 'message' => 'You can only enter grades for your assigned course sections'];
+                if (!$user->hasRole('super_admin') && !$user->hasRole('tmhrt_kfl')) {
+                    $errors[] = ['index' => $i, 'message' => 'Unauthorized: Only Tmhrt Kfl or Super Admin can enter grades'];
                     continue;
                 }
 
@@ -119,8 +115,8 @@ class GradeController extends Controller
         return response()->json(['message' => 'Unauthorized'], 401);
     }
 
-    if (!($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
-        return response()->json(['message' => 'Forbidden'], 403);
+    if (!($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
+        return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl or Super Admin can record grades.'], 403);
     }
 
     $data = $request->validate([
@@ -130,14 +126,6 @@ class GradeController extends Controller
     ]);
 
     $assessment = Assessment::findOrFail($data['assessment_id']);
-
-    if ($user->hasRole('teacher') && ! $this->teacherCanGrade(
-        $user,
-        $assessment->course_id,
-        $data['student_id']
-    )) {
-            return response()->json(['message' => 'Forbidden'], 403);
-    }
 
     if ($data['score'] > $assessment->max_score) {
         return response()->json([
@@ -191,17 +179,11 @@ class GradeController extends Controller
     public function destroy($id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
-            return response()->json(['message' => 'Forbidden: You can only view grades with your role.'], 403);
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
+            return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl or Super Admin can delete grades.'], 403);
         }
 
         $grade = Grade::findOrFail($id);
-        if ($user->hasRole('teacher')) {
-            $grade->load('assessment');
-            if (! $this->teacherCanGrade($user, $grade->assessment->course_id, $grade->student_id)) {
-                return response()->json(['message' => 'Forbidden'], 403);
-            }
-        }
         $grade->delete();
         return response()->json(null, 204);
     }

@@ -20,22 +20,14 @@ class AttendanceController extends Controller
         $validated = $request->validate([
             'assignment_id' => 'required|exists:assignments,id',
             'student_id' => 'required|exists:students,id',
-            'status' => 'required|in:Present,Absent,Excused',
+            'status' => 'required|in:Present,Absent,Excused,Late',
+            'session_date' => 'nullable|date',
         ]);
 
         $assignment = Assignment::with('section')->findOrFail($validated['assignment_id']);
-        if ($user->hasRole('teacher')) {
-            $isOwnAssignment = $assignment->assignmentCourses()
-                ->where('teacher_id', $user->id)
-                ->exists();
-
-            if (!$isOwnAssignment) {
-                return response()->json(['message' => 'Forbidden'], 403);
-            }
-        }
         $student = Student::with('section')->findOrFail($validated['student_id']);
 
-        if (!($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
             return response()->json([
                 'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can record attendance.'
             ], 403);
@@ -52,19 +44,67 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // Night shift validation: Ensure student and assignment shifts match
+        if ((bool) $student->is_night !== (bool) $assignment->is_night) {
+            $sessionShift = $assignment->is_night ? 'የማታ (Night)' : 'የቀን (Day)';
+            $studentShift = $student->is_night ? 'የማታ (Night)' : 'የቀን (Day)';
+            return response()->json([
+                'message' => "የፈረቃ ልዩነት (Shift Mismatch): ይህ ክፍለ-ጊዜ {$sessionShift} ነው። ተማሪ {$student->name} ግን የተመዘገበው በ{$studentShift} ፈረቃ ነው።"
+            ], 422);
+        }
+
+        $status = $validated['status'];
+        $lateMinutes = null;
+
+        // Auto-mark as Late if marked > 30 minutes after program start time
+        if ($assignment->start_time && in_array($status, ['Present', 'Late'])) {
+            try {
+                $now = now();
+                $startHour = (int) substr($assignment->start_time, 0, 2);
+                
+                if ($assignment->scheduled_date) {
+                    $baseDate = $assignment->scheduled_date;
+                } else {
+                    // For recurring: if session starts in evening (>= 17:00) and current time is early morning (< 07:00),
+                    // the session started yesterday evening.
+                    if ($startHour >= 17 && $now->hour < 7) {
+                        $baseDate = $now->copy()->subDay()->toDateString();
+                    } else {
+                        $baseDate = $now->toDateString();
+                    }
+                }
+
+                $sessionStart = \Carbon\Carbon::parse($baseDate . ' ' . $assignment->start_time);
+                $diffMinutes = (int) $sessionStart->diffInMinutes($now, false);
+
+                if ($diffMinutes > 30 && $diffMinutes < 720) {
+                    $status = 'Late';
+                    $lateMinutes = $diffMinutes;
+                }
+            } catch (\Exception $e) {}
+        }
+
+        $sessionDate = $validated['session_date'] ?? $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
+
         $attendance = Attendance::updateOrCreate(
             [
                 'assignment_id' => $validated['assignment_id'],
                 'student_id' => $validated['student_id'],
+                'session_date' => $sessionDate,
             ],
             [
-                'status' => $validated['status'],
+                'status' => $status,
+                'late_minutes' => $lateMinutes,
                 'marked_by_user_id' => $user->id,
                 'marked_at' => now(),
             ]
         );
 
-        return response()->json(['message' => 'Attendance recorded', 'attendance' => $attendance], 200);
+        $msg = $status === 'Late' && $lateMinutes 
+            ? "Attendance recorded: marked as Late ({$lateMinutes} mins after start time)" 
+            : "Attendance recorded ({$status})";
+
+        return response()->json(['message' => $msg, 'attendance' => $attendance, 'status' => $status], 200);
     }
 
     public function getAttendance(Request $request)
@@ -127,8 +167,15 @@ class AttendanceController extends Controller
             $query->where('student_id', $studentId);
         }
 
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $isNight = filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN);
+            $query->whereHas('assignment', function ($q) use ($isNight) {
+                $q->where('is_night', $isNight);
+            });
+        }
+
         if ($status = $request->input('status')) {
-            $allowedStatuses = ['Present', 'Absent', 'Excused'];
+            $allowedStatuses = ['Present', 'Absent', 'Excused', 'Late'];
             if (in_array($status, $allowedStatuses)) {
                 $query->where('status', $status);
             }
@@ -162,7 +209,7 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if (!($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
             return response()->json([
                 'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can scan and record attendance.'
             ], 403);
@@ -171,7 +218,7 @@ class AttendanceController extends Controller
         $validated = $request->validate([
             'assignment_id' => 'required|exists:assignments,id',
             'qr_data' => 'required',
-            'status' => 'nullable|in:Present,Absent,Excused',
+            'status' => 'nullable|in:Present,Absent,Excused,Late',
         ]);
 
         $status = $validated['status'] ?? 'Present';
@@ -225,21 +272,66 @@ class AttendanceController extends Controller
             ], 422);
         }
 
+        // Night shift validation: Ensure student and assignment shifts match
+        if ((bool) $student->is_night !== (bool) $assignment->is_night) {
+            $sessionShift = $assignment->is_night ? 'የማታ (Night)' : 'የቀን (Day)';
+            $studentShift = $student->is_night ? 'የማታ (Night)' : 'የቀን (Day)';
+            return response()->json([
+                'message' => "የፈረቃ ልዩነት (Shift Mismatch): ይህ ክፍለ-ጊዜ {$sessionShift} ሲሆን ተማሪ {$student->name} ግን የተመዘገበው በ{$studentShift} ፈረቃ ነው።"
+            ], 422);
+        }
+
+        $lateMinutes = null;
+
+        // Auto-mark as Late if scanned > 30 minutes after program start time
+        if ($assignment->start_time && in_array($status, ['Present', 'Late'])) {
+            try {
+                $now = now();
+                $startHour = (int) substr($assignment->start_time, 0, 2);
+                
+                if ($assignment->scheduled_date) {
+                    $baseDate = $assignment->scheduled_date;
+                } else {
+                    if ($startHour >= 17 && $now->hour < 7) {
+                        $baseDate = $now->copy()->subDay()->toDateString();
+                    } else {
+                        $baseDate = $now->toDateString();
+                    }
+                }
+
+                $sessionStart = \Carbon\Carbon::parse($baseDate . ' ' . $assignment->start_time);
+                $diffMinutes = (int) $sessionStart->diffInMinutes($now, false);
+
+                if ($diffMinutes > 30 && $diffMinutes < 720) {
+                    $status = 'Late';
+                    $lateMinutes = $diffMinutes;
+                }
+            } catch (\Exception $e) {}
+        }
+
         // 3. Record attendance
+        $sessionDate = $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
+
         $attendance = Attendance::updateOrCreate(
             [
                 'assignment_id' => $assignment->id,
                 'student_id' => $student->id,
+                'session_date' => $sessionDate,
             ],
             [
                 'status' => $status,
+                'late_minutes' => $lateMinutes,
                 'marked_by_user_id' => $user->id,
                 'marked_at' => now(),
             ]
         );
 
+        $feedbackMsg = $status === 'Late' && $lateMinutes 
+            ? "{$student->name} marked as Late ({$lateMinutes} mins after start time)!" 
+            : "{$student->name} marked as {$status}!";
+
         return response()->json([
-            'message' => "{$student->name} marked as {$status}!",
+            'message' => $feedbackMsg,
             'attendance' => $attendance,
             'student' => [
                 'id' => $student->id,
@@ -249,6 +341,7 @@ class AttendanceController extends Controller
                 'section_name' => $student->section?->name ?? 'Unassigned',
                 'picture_url' => $student->picture_url,
                 'status' => $status,
+                'late_minutes' => $lateMinutes,
                 'marked_at' => now()->format('H:i:s'),
             ],
         ], 200);
@@ -287,15 +380,26 @@ class AttendanceController extends Controller
             $studentsQuery->where('is_mezmur', true);
         }
 
-        $students = $studentsQuery->orderBy('name', 'asc')->get();
+        // Night schedule strictly expects night students; Day schedule expects day students
+        if ($assignment->is_night) {
+            $studentsQuery->where('is_night', true);
+        } else {
+            $studentsQuery->where('is_night', false);
+        }
 
-        // Fetch existing attendance records for this session
+        $students = $studentsQuery->notFlagged()->orderBy('name', 'asc')->get();
+
+        $sessionDate = $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
+
+        // Fetch existing attendance records for this session date
         $attendances = Attendance::where('assignment_id', $assignment->id)
+            ->where('session_date', $sessionDate)
             ->get()
             ->keyBy('student_id');
 
         $roster = [];
         $presentCount = 0;
+        $lateCount = 0;
         $absentCount = 0;
         $excusedCount = 0;
 
@@ -304,6 +408,7 @@ class AttendanceController extends Controller
             $status = $att ? $att->status : 'Unmarked';
 
             if ($status === 'Present') $presentCount++;
+            elseif ($status === 'Late') $lateCount++;
             elseif ($status === 'Absent') $absentCount++;
             elseif ($status === 'Excused') $excusedCount++;
 
@@ -314,6 +419,7 @@ class AttendanceController extends Controller
                 'christian_name' => $st->christian_name,
                 'picture_url' => $st->picture_url,
                 'status' => $status,
+                'late_minutes' => $att?->late_minutes,
                 'marked_at' => $att?->marked_at ? date('H:i', strtotime($att->marked_at)) : null,
             ];
         }
@@ -322,6 +428,7 @@ class AttendanceController extends Controller
             'assignment' => [
                 'id' => $assignment->id,
                 'type' => $assignment->type,
+                'is_night' => (bool) $assignment->is_night,
                 'title' => $assignment->type === 'Course' 
                     ? ($assignment->assignmentCourses->first()?->course?->name ?? 'Course') 
                     : ($assignment->mezmurs->first()?->title ?? 'Mezmur Training'),
@@ -333,9 +440,10 @@ class AttendanceController extends Controller
             'stats' => [
                 'total' => count($students),
                 'present' => $presentCount,
+                'late' => $lateCount,
                 'absent' => $absentCount,
                 'excused' => $excusedCount,
-                'unmarked' => count($students) - ($presentCount + $absentCount + $excusedCount),
+                'unmarked' => count($students) - ($presentCount + $lateCount + $absentCount + $excusedCount),
             ],
             'students' => $roster,
         ]);

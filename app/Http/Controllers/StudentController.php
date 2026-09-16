@@ -67,6 +67,10 @@ class StudentController extends Controller
             $query->where('section_id', $sectionId);
         }
 
+        if ($request->has('is_night') && $request->query('is_night') !== '' && $request->query('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->query('is_night'), FILTER_VALIDATE_BOOLEAN));
+        }
+
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
@@ -118,6 +122,10 @@ class StudentController extends Controller
 
         if ($request->has('is_mezmur')) {
             $query->where('is_mezmur', $request->query('is_mezmur'));
+        }
+
+        if ($request->has('is_night') && $request->query('is_night') !== '' && $request->query('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->query('is_night'), FILTER_VALIDATE_BOOLEAN));
         }
 
         if ($search) {
@@ -185,6 +193,9 @@ class StudentController extends Controller
 
     public function storeUnified(Request $request)
     {
+        $track = $request->input('track', 'Regular');
+        $isDistance = strtolower($track) === 'distance';
+
         $request->validate([
             'name' => 'required|string|max:255',
             'christian_name' => 'nullable|string|max:255',
@@ -211,12 +222,14 @@ class StudentController extends Controller
             'status' => 'nullable|string|in:new,regular,Active,Inactive',
             'section_id' => 'nullable|exists:sections,id',
             'track' => 'nullable|string',
+            'round' => $isDistance ? 'required|string|max:50' : 'nullable|string|max:50',
             'picture' => 'nullable|image|max:10240',
-            'birth_certificates.*' => 'nullable|file|max:15360',
-            'educational_certificates.*' => 'nullable|file|max:15360',
+            'birth_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
+            'educational_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
+        ], [
+            'round.required' => 'የየርቀት ትምህርት ተማሪዎች ዙር (Round) ማስገባት ግዴታ ነው። (Round is mandatory for Distance students).',
         ]);
 
-        $track = $request->input('track', 'Regular');
         $prefix = match (strtolower($track)) {
             'distance' => 'DIS',
             'prekg' => 'PKG',
@@ -382,8 +395,8 @@ class StudentController extends Controller
             'status' => 'nullable|string|in:new,regular,Active,Inactive',
             'section_id' => 'nullable|exists:sections,id',
             'picture' => 'nullable|image|max:10240',
-            'birth_certificates.*' => 'nullable|file|max:15360',
-            'educational_certificates.*' => 'nullable|file|max:15360',
+            'birth_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
+            'educational_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
         ]);
 
         return DB::transaction(function () use ($request, $student) {
@@ -618,12 +631,59 @@ class StudentController extends Controller
 
     private function generateStudentId(string $prefix, ?string $round = null): string
     {
-        if ($prefix === 'DIS' && $round) {
-            $count = Student::where('student_id', 'like', "{$prefix}/{$round}/%")->count() + 1;
-            return "{$prefix}/{$round}/{$count}";
+        if ($prefix === 'DIS') {
+            if (!$round) {
+                throw new \InvalidArgumentException('Distance track requires a designated round (ዙር).');
+            }
+            $cleanRound = trim($round);
+            $pattern = "{$prefix}/{$cleanRound}/";
+            $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
+
+            $maxSeq = 0;
+            foreach ($existingIds as $id) {
+                $parts = explode('/', $id);
+                $suffix = end($parts);
+                if (is_numeric($suffix)) {
+                    $num = (int) $suffix;
+                    if ($num > $maxSeq) {
+                        $maxSeq = $num;
+                    }
+                }
+            }
+            $nextSeq = $maxSeq + 1;
+            $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
+
+            while (Student::where('student_id', $formattedId)->exists()) {
+                $nextSeq++;
+                $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
+            }
+
+            return $formattedId;
         }
-        $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
-        return "{$prefix}/{$count}";
+
+        $pattern = "{$prefix}/";
+        $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
+
+        $maxSeq = 0;
+        foreach ($existingIds as $id) {
+            $parts = explode('/', $id);
+            $suffix = end($parts);
+            if (is_numeric($suffix)) {
+                $num = (int) $suffix;
+                if ($num > $maxSeq) {
+                    $maxSeq = $num;
+                }
+            }
+        }
+        $nextSeq = $maxSeq + 1;
+        $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
+
+        while (Student::where('student_id', $formattedId)->exists()) {
+            $nextSeq++;
+            $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
+        }
+
+        return $formattedId;
     }
 
     // ------------------ MEZMUR ASSIGNMENT ------------------
@@ -637,7 +697,7 @@ class StudentController extends Controller
 
         DB::transaction(function () use ($request) {
             Student::whereIn('id', $request->student_ids)
-                ->update(['is_mezmur' => true, 'is_mezmur_member' => true]);
+                ->update(['is_mezmur' => true]);
         });
 
         return response()->json(['message' => 'Students assigned to Mezmur successfully.']);
@@ -652,7 +712,7 @@ class StudentController extends Controller
 
         DB::transaction(function () use ($request) {
             Student::whereIn('id', $request->student_ids)
-                ->update(['is_mezmur' => false, 'is_mezmur_member' => false]);
+                ->update(['is_mezmur' => false]);
         });
 
         return response()->json(['message' => 'Students removed from Mezmur successfully.']);
@@ -663,10 +723,7 @@ class StudentController extends Controller
         $search = $request->query('search');
 
         $query = Student::with(['address', 'contacts', 'section.programType'])
-            ->where(function ($q) {
-                $q->where('is_mezmur', true)
-                  ->orWhere('is_mezmur_member', true);
-            });
+            ->where('is_mezmur', true);
 
         if ($search) {
             $query->where(function ($q) use ($search) {
@@ -683,7 +740,7 @@ class StudentController extends Controller
     public function flagStudent(Request $request, $id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
             return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can flag students.'], 403);
         }
 
@@ -700,7 +757,6 @@ class StudentController extends Controller
         $student->flagged_at = now();
         // Flagged students are barred from Mezmur and ministries
         $student->is_mezmur = false;
-        $student->is_mezmur_member = false;
         $student->save();
 
         return response()->json([
@@ -712,7 +768,7 @@ class StudentController extends Controller
     public function unflagStudent(Request $request, $id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
             return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can unflag students.'], 403);
         }
 

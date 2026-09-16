@@ -93,88 +93,80 @@ class StudentGradeController extends Controller
 }
 
     public function sectionRankings($sectionId)
-{
-    $students = Student::where('section_id', $sectionId)->get();
+    {
+        $students = Student::where('section_id', $sectionId)->get(['id', 'name', 'student_id']);
 
-    if ($students->isEmpty()) {
-        return response()->json([]);
-    }
+        if ($students->isEmpty()) {
+            return response()->json([]);
+        }
 
-    $rankings = [];
+        // 1. Get course IDs for this section
+        $courseIds = \App\Models\AssignmentCourse::whereIn(
+            'assignment_id',
+            \App\Models\Assignment::where('section_id', $sectionId)
+                ->where('type', 'Course')
+                ->pluck('id')
+        )->pluck('course_id')->unique();
 
-    foreach ($students as $student) {
-        $totals = $this->calculateStudentTotals(
-            $student->id,
-            $sectionId
-        );
+        if ($courseIds->isEmpty()) {
+            return response()->json([]);
+        }
 
-        $rankings[] = [
-            'id' => $student->id,
-            'name' => $student->name,
-            'student_id' => $student->student_id,
-            'overall_average' => $totals['overall_average']
-        ];
-    }
+        // 2. Fetch all courses with their assessments in a single query
+        $courses = Course::whereIn('id', $courseIds)->with('assessments')->get();
+        $assessmentIds = $courses->flatMap(fn($c) => $c->assessments->pluck('id'))->unique();
 
-    usort($rankings, fn($a, $b) =>
-        $b['overall_average'] <=> $a['overall_average']
-    );
+        // 3. Fetch all grades for all section students across these assessments in a single bulk query
+        $grades = \App\Models\Grade::whereIn('assessment_id', $assessmentIds)
+            ->whereIn('student_id', $students->pluck('id'))
+            ->get()
+            ->groupBy('student_id');
 
-    return response()->json(array_slice($rankings, 0, 10));
-}
+        $rankings = [];
 
-    private function calculateStudentTotals($studentId, $sectionId)
-{
-    $courseIds = \App\Models\AssignmentCourse::whereIn(
-        'assignment_id',
-        \App\Models\Assignment::where('section_id', $sectionId)
-            ->where('type', 'Course')
-            ->pluck('id')
-    )->pluck('course_id');
+        foreach ($students as $student) {
+            $studentGrades = ($grades->get($student->id) ?? collect())->keyBy('assessment_id');
+            $sumCourseGrades = 0;
+            $countCourses = 0;
 
-    $courses = Course::whereIn('id', $courseIds)->get();
+            foreach ($courses as $course) {
+                if ($course->assessments->isEmpty()) continue;
 
-    $sumCourseGrades = 0;
-    $countCourses = 0;
+                $sumWeighted = 0;
+                $sumWeights = 0;
 
-    foreach ($courses as $course) {
-        $assessments = $course->assessments;
+                foreach ($course->assessments as $assessment) {
+                    $weight = (float) ($assessment->weight ?: 100);
+                    $sumWeights += $weight;
 
-        if ($assessments->isEmpty()) continue;
+                    $grade = $studentGrades->get($assessment->id);
+                    $rawScore = $grade ? (float) $grade->score : 0;
 
-        $sumWeighted = 0;
-        $sumWeights = 0;
+                    if ($assessment->max_score > 0) {
+                        $sumWeighted += ($rawScore / $assessment->max_score) * $weight;
+                    }
+                }
 
-        foreach ($assessments as $assessment) {
-            $sumWeights += (float) $assessment->weight;
-
-            $grade = $assessment->grades()
-                ->where('student_id', $studentId)
-                ->first();
-
-            $rawScore = $grade ? (float) $grade->score : 0;
-
-            if ($assessment->max_score > 0) {
-                $sumWeighted +=
-                    ($rawScore / $assessment->max_score)
-                    * $assessment->weight;
+                if ($sumWeights > 0) {
+                    $sumCourseGrades += ($sumWeighted / $sumWeights) * 100;
+                    $countCourses++;
+                }
             }
+
+            $overallAverage = $countCourses ? round($sumCourseGrades / $countCourses, 2) : 0;
+
+            $rankings[] = [
+                'id' => $student->id,
+                'name' => $student->name,
+                'student_id' => $student->student_id,
+                'overall_average' => $overallAverage,
+            ];
         }
 
-        if ($sumWeights > 0) {
-            $sumCourseGrades +=
-                ($sumWeighted / $sumWeights) * 100;
+        usort($rankings, fn($a, $b) => $b['overall_average'] <=> $a['overall_average']);
 
-            $countCourses++;
-        }
+        return response()->json(array_slice($rankings, 0, 10));
     }
-
-    return [
-        'overall_average' => $countCourses
-            ? round($sumCourseGrades / $countCourses, 2)
-            : 0
-    ];
-}
 
     /**
      * Get complete report cards for all students in a section (used for bulk PDF generation)

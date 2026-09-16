@@ -21,21 +21,4 @@ return [
         'grades_manage',
         'teachers_manage',
     ],
-    // Backward compatibility aliases
-    'gngnunet_office_admin' => [
-        'student_registration',
-        'attendance_taking',
-        'ministry_assignment',
-    ],
-    'mezmur_office_admin' => [
-        'view_students',
-        'mezmur_schedules',
-        'mezmur_exams',
-    ],
-    'tmhrt_office_admin' => [
-        'tmhrt_schedules',
-        'courses_manage',
-        'grades_manage',
-    ],
-    'teacher' => [],
 ];

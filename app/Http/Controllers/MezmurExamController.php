@@ -23,13 +23,13 @@ class MezmurExamController extends Controller
                 'results as passed_count' => fn($q) => $q
                     ->where('status', 'passed')
                     ->whereHas('student', fn($student) => $student
-                        ->where('status', 'regular')
-                        ->where('status', '!=', 'new')),
+                        ->whereIn('status', ['regular', 'Active'])
+                        ->whereNotIn('status', ['new', 'Inactive', 'Graduated'])),
                 'results as failed_count' => fn($q) => $q
                     ->where('status', 'failed')
                     ->whereHas('student', fn($student) => $student
-                        ->where('status', 'regular')
-                        ->where('status', '!=', 'new')),
+                        ->whereIn('status', ['regular', 'Active'])
+                        ->whereNotIn('status', ['new', 'Inactive', 'Graduated'])),
                 'results as sent_count' => fn($q) => $q->where('sent_to_yesew_habt', true),
             ])
             ->orderBy('exam_date', 'desc')
@@ -78,8 +78,8 @@ class MezmurExamController extends Controller
     {
         $query = Student::notFlagged()
             ->with('section')
-            ->where('status', 'regular')
-            ->where('status', '!=', 'new');
+            ->whereIn('status', ['regular', 'Active'])
+            ->whereNotIn('status', ['new', 'Inactive', 'Graduated']);
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {

@@ -33,10 +33,10 @@ class RegisteredUserController extends Controller
                 'name' => 'required|string|max:255',
                 'username' => 'required|string|unique:users',
                 'password' => 'required|string|min:8|confirmed',
-                'role' => 'required|string',
+                'role' => 'required|string|in:super_admin,yesew_habt,tmhrt_kfl,mezmur_kfl,mereja_kfl',
                 'security_question' => 'required|string|max:255',
                 'security_answer' => 'required|string|max:255',
-                'program_type_ids' => 'array',
+                'program_type_ids' => 'nullable|array',
                 'program_type_ids.*' => 'exists:program_types,id',
             ]);
 
@@ -45,28 +45,23 @@ class RegisteredUserController extends Controller
                 return response()->json(['error' => 'Unauthenticated user'], 401);
             }
 
+            if (!$user->hasRole('super_admin')) {
+                return response()->json(['error' => 'ተጠቃሚዎችን መመዝገብ የሚችለው የበላይ አስተዳዳሪ (Super Admin) ብቻ ነው። (Only Super Admin can register users)'], 403);
+            }
+
             $targetRole = $request->role;
 
-            if ($targetRole === 'teacher' && !$user->hasRole('tmhrt_kfl')) {
-                return response()->json(['error' => 'Only the Tmhrt Kfl can register teachers'], 403);
-            }
-
-            if ($targetRole !== 'teacher' && !$user->hasRole('super_admin')) {
-                return response()->json(['error' => 'Only the Super Admin can register this role'], 403);
-            }
-
-            $user = User::create([
+            $newUser = User::create([
                 'name' => $request->name,
                 'username' => $request->username,
                 'password' => Hash::make($request->password),
                 'security_question' => $request->security_question,
                 'security_answer' => Hash::make($request->security_answer),
             ]);
-            $user->assignRole($targetRole);
+            $newUser->assignRole($targetRole);
 
-            // Assign program types if teacher
-            if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
-                $user->programTypes()->sync($request->program_type_ids);
+            if ($request->filled('program_type_ids')) {
+                $newUser->programTypes()->sync($request->program_type_ids);
             }
 
             return response()->json(['message' => 'User registered successfully'], 201);
@@ -83,18 +78,12 @@ class RegisteredUserController extends Controller
     private function allowedToRegister($role)
     {
         return match ($role) {
-            'tmhrt_kfl' => ['teacher'],
-            'mezmur_office_admin' => ['mezmur_office_coordinator'],
-            'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
-            'young_tmhrt_admin' => ['teacher'],  // assuming young admin role added
-            'distance_admin' => ['teacher', 'distance_coordinator'],
-            'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
-                'mezmur_office_coordinator',
-                'teacher', 'tmhrt_office_coordinator',
-                'distance_coordinator', 'gngnunet_office_coordinator', 'student',
-                'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
-                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin','young_gngnunet_admin'
+                'super_admin',
+                'yesew_habt',
+                'tmhrt_kfl',
+                'mezmur_kfl',
+                'mereja_kfl',
             ],
             default => []
         };

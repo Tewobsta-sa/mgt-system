@@ -30,6 +30,7 @@ class StudentImportController extends Controller
         'kebele',
         'house_no',
         'classification',
+        'round',
         'section_name',
         'status',
     ];
@@ -53,6 +54,7 @@ class StudentImportController extends Controller
         '[OPTIONAL Kebele]',
         '[OPTIONAL House No]',
         '[OPTIONAL: prekg/htsanat/maekelawyan/wetatoch/distance]',
+        '[MANDATORY for Distance (e.g. 1, 2, 2016), OPTIONAL for others]',
         '[MANDATORY Section Name]',
         '[OPTIONAL: new/regular (default: new)]',
     ];
@@ -76,6 +78,7 @@ class StudentImportController extends Controller
         'Kebele 05',
         '1234',
         'maekelawyan',
+        '1',
         'Maekelawyan 5 (Grade 5)',
         'new',
     ];
@@ -202,7 +205,13 @@ class StudentImportController extends Controller
                     default => 'REG',
                 };
 
-                $studentId = $this->generateStudentId($prefix);
+                $round = $payload['round'] ?? null;
+                if ($prefix === 'DIS' && empty($round)) {
+                    $errors[] = ['row' => $rowNumber, 'errors' => ["የየርቀት ትምህርት ተማሪዎች ዙር (Round) ማካተት ግዴታ ነው። (Round is mandatory for Distance students)."]];
+                    continue;
+                }
+
+                $studentId = $this->generateStudentId($prefix, $round);
 
                 $age = null;
                 if (!empty($payload['birth_date'])) {
@@ -308,12 +317,59 @@ class StudentImportController extends Controller
 
     private function generateStudentId(string $prefix, ?string $round = null): string
     {
-        if ($prefix === 'DIS' && $round) {
-            $count = Student::where('student_id', 'like', "{$prefix}/{$round}/%")->count() + 1;
-            return "{$prefix}/{$round}/{$count}";
+        if ($prefix === 'DIS') {
+            if (!$round) {
+                throw new \InvalidArgumentException('Distance track requires a designated round (ዙር).');
+            }
+            $cleanRound = trim($round);
+            $pattern = "{$prefix}/{$cleanRound}/";
+            $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
+
+            $maxSeq = 0;
+            foreach ($existingIds as $id) {
+                $parts = explode('/', $id);
+                $suffix = end($parts);
+                if (is_numeric($suffix)) {
+                    $num = (int) $suffix;
+                    if ($num > $maxSeq) {
+                        $maxSeq = $num;
+                    }
+                }
+            }
+            $nextSeq = $maxSeq + 1;
+            $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
+
+            while (Student::where('student_id', $formattedId)->exists()) {
+                $nextSeq++;
+                $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
+            }
+
+            return $formattedId;
         }
-        $count = Student::where('student_id', 'like', "{$prefix}/%")->count() + 1;
-        return "{$prefix}/{$count}";
+
+        $pattern = "{$prefix}/";
+        $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
+
+        $maxSeq = 0;
+        foreach ($existingIds as $id) {
+            $parts = explode('/', $id);
+            $suffix = end($parts);
+            if (is_numeric($suffix)) {
+                $num = (int) $suffix;
+                if ($num > $maxSeq) {
+                    $maxSeq = $num;
+                }
+            }
+        }
+        $nextSeq = $maxSeq + 1;
+        $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
+
+        while (Student::where('student_id', $formattedId)->exists()) {
+            $nextSeq++;
+            $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
+        }
+
+        return $formattedId;
     }
 
     private function readRows(\Illuminate\Http\UploadedFile $file): array

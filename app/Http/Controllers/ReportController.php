@@ -26,15 +26,14 @@ class ReportController extends Controller
     private function exportStudents(Request $request)
     {
         $headers = [
-            'Content-Type' => 'text/csv',
+            'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="students_report.csv"',
         ];
 
-        // FIX: removed program_type_id filter (doesn't exist)
-        $students = Student::with(['section'])->get();
-
-        $callback = function () use ($students) {
+        $callback = function () {
             $file = fopen('php://output', 'w');
+            // Write UTF-8 BOM so Excel displays Amharic characters correctly
+            fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
             fputcsv($file, [
                 'ID',
@@ -45,7 +44,7 @@ class ReportController extends Controller
                 'Birth Date'
             ]);
 
-            foreach ($students as $student) {
+            foreach (Student::with('section')->cursor() as $student) {
                 fputcsv($file, [
                     $student->id,
                     $student->name,
@@ -66,24 +65,21 @@ class ReportController extends Controller
      * GRADES EXPORT (FIXED SAFETY)
      * ----------------------------------------- */
     private function exportGrades(Request $request)
-{
-    $headers = [
-        'Content-Type' => 'text/csv',
-        'Content-Disposition' => 'attachment; filename="academic_report_cards.csv"',
-    ];
+    {
+        $headers = [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="academic_report_cards.csv"',
+        ];
 
-    $students = Student::with([
-        'grades.assessment.course'
-    ])->get();
+        $callback = function () {
+            $file = fopen('php://output', 'w');
+            fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
-    $callback = function () use ($students) {
-        $file = fopen('php://output', 'w');
+            foreach (Student::with('grades.assessment.course')->cursor() as $student) {
 
-        foreach ($students as $student) {
-
-            fputcsv($file, []);
-            fputcsv($file, [$student->name]);
-            fputcsv($file, []); // spacing
+                fputcsv($file, []);
+                fputcsv($file, [$student->name]);
+                fputcsv($file, []); // spacing
 
             // GROUP GRADES BY COURSE
             $courses = [];
@@ -184,9 +180,7 @@ class ReportController extends Controller
             $query->where('status', $status);
         }
 
-        $attendance = $query->orderBy('marked_at', 'desc')->get();
-
-        $callback = function () use ($attendance) {
+        $callback = function () use ($query) {
             $file = fopen('php://output', 'w');
             // Write UTF-8 BOM so Excel displays Amharic characters correctly
             fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
@@ -203,7 +197,7 @@ class ReportController extends Controller
                 'Status'
             ]);
 
-            foreach ($attendance as $record) {
+            foreach ($query->orderBy('marked_at', 'desc')->cursor() as $record) {
                 $secName = $record->assignment?->section?->name ?? $record->student?->section?->name ?? 'Unassigned';
                 $courseName = $record->assignment?->type === 'Course' 
                     ? ($record->assignment?->assignmentCourses?->first()?->course?->name ?? 'Course')

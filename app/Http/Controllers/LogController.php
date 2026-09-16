@@ -25,6 +25,16 @@ class LogController extends Controller
             $query->where('action', $request->query('action'));
         }
 
-        return $query->latest()->paginate($request->query('per_page', 20));
+        $logs = $query->latest()->paginate($request->query('per_page', 20));
+
+        $logs->getCollection()->transform(function ($log) {
+            $meta = \App\Services\StatisticService::resolveActionMetadata($log);
+            $log->formatted_action = $meta['action'];
+            $log->category = $meta['category'];
+            $log->badge_type = $meta['badge_type'];
+            return $log;
+        });
+
+        return response()->json($logs);
     }
 }

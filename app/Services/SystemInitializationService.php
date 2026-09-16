@@ -13,12 +13,9 @@ class SystemInitializationService
     private static array $adminRoles = [
         'super_admin',
         'yesew_habt',
-        'mereja_kfl',
-        'mezmur_kfl',
         'tmhrt_kfl',
-        'mezmur_office_admin',
-        'tmhrt_office_admin',
-        'gngnunet_office_admin',
+        'mezmur_kfl',
+        'mereja_kfl',
     ];
 
     /**

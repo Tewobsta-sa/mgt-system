@@ -29,8 +29,6 @@ class User extends Authenticatable
 
     protected $with = ['roles'];
 
-    protected $guarded = [];
-
     /**
      * The attributes that should be hidden for serialization.
      *
@@ -39,6 +37,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'security_answer',
     ];
 
     /**
