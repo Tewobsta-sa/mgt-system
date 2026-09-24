@@ -451,6 +451,19 @@ class StudentPromotionController extends Controller
                         ->where('program_type_id', $student->section->program_type_id)
                         ->where('order_no', '>', $student->section->order_no)
                         ->first();
+
+                    // If reached the end of PreKG, resolve transition to first section of Regular (Htsanat 1)
+                    if (!$nextSec) {
+                        $prekgProg = ProgramType::where('name', 'PreKG')->first();
+                        $regularProg = ProgramType::where('name', 'Regular')->first();
+                        if ($prekgProg && $regularProg && (int)$student->section->program_type_id === (int)$prekgProg->id) {
+                            $nextSec = $allSections
+                                ->where('program_type_id', $regularProg->id)
+                                ->sortBy('order_no')
+                                ->first();
+                        }
+                    }
+
                     $resolvedTargetId = $nextSec?->id;
                 }
 
@@ -535,7 +548,7 @@ class StudentPromotionController extends Controller
             'notes' => 'nullable|string|max:500',
         ]);
 
-        $students = Student::with(['section', 'targetSection'])
+        $students = Student::with(['section', 'targetSection.programType'])
             ->whereIn('id', $request->student_ids)
             ->where('promotion_status', 'endorsed_yesew')
             ->get();
@@ -552,6 +565,10 @@ class StudentPromotionController extends Controller
                     $student->section_id = $student->target_section_id;
                     if ($student->targetSection) {
                         $student->grade_level = $student->targetSection->name;
+                        // When transitioning from PreKG into Regular, upgrade classification to htsanat
+                        if ($student->targetSection->programType?->name === 'Regular' && $student->classification === 'prekg') {
+                            $student->classification = 'htsanat';
+                        }
                     }
                 } else {
                     $student->status = 'Graduated';

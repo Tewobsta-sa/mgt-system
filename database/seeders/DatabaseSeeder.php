@@ -2,12 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\ProgramType;
-use App\Models\User;
-// use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
@@ -16,9 +11,10 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        $this->call(RolesAndPermissionsSeeder::class);
-        $this->call(AdminUserSeeder::class);
-        $this->call(ProgramTypeSeeder::class);
-        $this->call(SectionsNew::class);
+        $this->call([
+            RolesAndPermissionsSeeder::class,
+            AdminUserSeeder::class,
+            ProgramTypesAndSectionsSeeder::class,
+        ]);
     }
 }
