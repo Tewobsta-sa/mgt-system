@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Student;
 use App\Models\Section;
 use App\Models\ProgramType;
+use App\Services\StudentIdGenerator;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -80,7 +82,7 @@ class StudentController extends Controller
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate($request->query('per_page', 10));
+        return $query->orderBy('name')->paginate($request->query('per_page', 10));
     }
 
     protected function queryByType(string $type, Request $request)
@@ -120,7 +122,7 @@ class StudentController extends Controller
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate($request->query('per_page', 10));
+        return $query->orderBy('name')->paginate($request->query('per_page', 10));
     }
 
     /**
@@ -150,27 +152,27 @@ class StudentController extends Controller
 
     // ------------------ SHOW ------------------
 
-    public function showPreKG($id)
+    public function showPreKG(Request $request, $id)
     {
-        return $this->showStudent($id);
+        return $this->showStudent($request, $id);
     }
 
-    public function showRegular($id)
+    public function showRegular(Request $request, $id)
     {
-        return $this->showStudent($id);
+        return $this->showStudent($request, $id);
     }
 
-    public function showYoung($id)
+    public function showYoung(Request $request, $id)
     {
-        return $this->showStudent($id);
+        return $this->showStudent($request, $id);
     }
 
-    public function showDistance($id)
+    public function showDistance(Request $request, $id)
     {
-        return $this->showStudent($id);
+        return $this->showStudent($request, $id);
     }
 
-    public function showStudent($id)
+    public function showStudent(Request $request, $id)
     {
         $student = Student::with(['address', 'contacts', 'section.programType'])->findOrFail($id);
 
@@ -192,9 +194,25 @@ class StudentController extends Controller
             ? round(($courseStats->attended / $courseStats->total) * 100, 2) 
             : 0;
 
-        $student->mezmur_attendance_avg = $mezmurStats && $mezmurStats->total > 0 
-            ? round(($mezmurStats->attended / $mezmurStats->total) * 100, 2) 
+        $student->mezmur_attendance_avg = $mezmurStats && $mezmurStats->total > 0
+            ? round(($mezmurStats->attended / $mezmurStats->total) * 100, 2)
             : 0;
+
+        // Flag history is privileged — Ye Sew Habt and Super Admin only.
+        if ($request->user()?->hasAnyRole(['super_admin', 'yesew_habt'])) {
+            $student->flag_history = $student->flagEvents()
+                ->with(['flagger:id,name', 'unflagger:id,name'])
+                ->latest('flagged_at')
+                ->get()
+                ->map(fn ($e) => [
+                    'id' => $e->id,
+                    'reason' => $e->reason,
+                    'flagged_by' => $e->flagger?->name,
+                    'flagged_at' => $e->flagged_at,
+                    'unflagged_by' => $e->unflagger?->name,
+                    'unflagged_at' => $e->unflagged_at,
+                ]);
+        }
 
         return response()->json($student);
     }
@@ -278,9 +296,12 @@ class StudentController extends Controller
             default => 'REG',
         };
 
-        $studentId = $this->generateStudentId($prefix, $request->input('round'));
-
-        return DB::transaction(function () use ($request, $studentId, $prefix) {
+        // Retry a few times in case a concurrent registration claims the same
+        // generated student_id between the MAX() lookup and the insert.
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $studentId = StudentIdGenerator::next($prefix, $request->input('round'));
+            try {
+                return DB::transaction(function () use ($request, $studentId, $prefix) {
             // Handle picture upload
             $picturePath = null;
             if ($request->hasFile('picture')) {
@@ -382,7 +403,14 @@ class StudentController extends Controller
             }
 
             return response()->json($student->load(['address', 'contacts', 'section.programType']), 201);
-        });
+                });
+            } catch (QueryException $e) {
+                // Unique-collision on student_id → regenerate and retry.
+                if ($attempt === 2 || !str_contains($e->getMessage(), 'student_id')) {
+                    throw $e;
+                }
+            }
+        }
     }
 
     public function storeRegular(Request $request)
@@ -760,65 +788,6 @@ class StudentController extends Controller
         return $query->limit(5)->get(['id', 'student_id', 'name', 'birth_date', 'section_id', 'status', 'family_guardian_phone']);
     }
 
-    // ------------------ STUDENT ID GENERATION ------------------
-
-    private function generateStudentId(string $prefix, ?string $round = null): string
-    {
-        if ($prefix === 'DIS') {
-            if (!$round) {
-                throw new \InvalidArgumentException('Distance track requires a designated round (ዙር).');
-            }
-            $cleanRound = trim($round);
-            $pattern = "{$prefix}/{$cleanRound}/";
-            $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
-
-            $maxSeq = 0;
-            foreach ($existingIds as $id) {
-                $parts = explode('/', $id);
-                $suffix = end($parts);
-                if (is_numeric($suffix)) {
-                    $num = (int) $suffix;
-                    if ($num > $maxSeq) {
-                        $maxSeq = $num;
-                    }
-                }
-            }
-            $nextSeq = $maxSeq + 1;
-            $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
-
-            while (Student::where('student_id', $formattedId)->exists()) {
-                $nextSeq++;
-                $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
-            }
-
-            return $formattedId;
-        }
-
-        $pattern = "{$prefix}/";
-        $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
-
-        $maxSeq = 0;
-        foreach ($existingIds as $id) {
-            $parts = explode('/', $id);
-            $suffix = end($parts);
-            if (is_numeric($suffix)) {
-                $num = (int) $suffix;
-                if ($num > $maxSeq) {
-                    $maxSeq = $num;
-                }
-            }
-        }
-        $nextSeq = $maxSeq + 1;
-        $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
-
-        while (Student::where('student_id', $formattedId)->exists()) {
-            $nextSeq++;
-            $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
-        }
-
-        return $formattedId;
-    }
-
     // ------------------ MEZMUR ASSIGNMENT ------------------
 
     public function assignMezmur(Request $request)
@@ -871,7 +840,7 @@ class StudentController extends Controller
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate(10);
+        return $query->orderBy('name')->paginate(10);
     }
 
     // ------------------ STUDENT FLAGGING / RESTRICTION (Ye Sew Habt) ------------------
@@ -890,13 +859,25 @@ class StudentController extends Controller
         ]);
 
         $student = Student::findOrFail($id);
-        $student->is_flagged = true;
-        $student->flag_reason = $request->input('reason');
-        $student->flagged_by = $user->id;
-        $student->flagged_at = now();
-        // Flagged students are barred from Mezmur and ministries
-        $student->is_mezmur = false;
-        $student->save();
+
+        DB::transaction(function () use ($student, $request, $user) {
+            // Remember mezmur membership so unflag can restore it.
+            $student->was_mezmur_before_flag = (bool) $student->is_mezmur;
+            $student->is_flagged = true;
+            $student->flag_reason = $request->input('reason');
+            $student->flagged_by = $user->id;
+            $student->flagged_at = now();
+            // Flagged students are barred from Mezmur and ministries
+            $student->is_mezmur = false;
+            $student->save();
+
+            // Permanent audit row — survives after the live flag fields clear.
+            $student->flagEvents()->create([
+                'reason' => $request->input('reason'),
+                'flagged_by' => $user->id,
+                'flagged_at' => now(),
+            ]);
+        });
 
         return response()->json([
             'message' => "ተማሪ {$student->name} በተሳካ ሁኔታ ታግዷል/ማስታወሻ ተይዟል። (Student successfully flagged).",
@@ -912,11 +893,30 @@ class StudentController extends Controller
         }
 
         $student = Student::findOrFail($id);
-        $student->is_flagged = false;
-        $student->flag_reason = null;
-        $student->flagged_by = null;
-        $student->flagged_at = null;
-        $student->save();
+
+        DB::transaction(function () use ($student, $user) {
+            $student->is_flagged = false;
+            $student->flag_reason = null;
+            $student->flagged_by = null;
+            $student->flagged_at = null;
+
+            // Restore mezmur membership if the student had it when flagged.
+            if ($student->was_mezmur_before_flag) {
+                $student->is_mezmur = true;
+            }
+            $student->was_mezmur_before_flag = false;
+            $student->save();
+
+            // Close the open flag event instead of erasing the history.
+            $student->flagEvents()
+                ->whereNull('unflagged_at')
+                ->latest('flagged_at')
+                ->first()
+                ?->update([
+                    'unflagged_by' => $user->id,
+                    'unflagged_at' => now(),
+                ]);
+        });
 
         return response()->json([
             'message' => "የተማሪ {$student->name} እገዳ ተነስቷል። (Student restriction cleared).",

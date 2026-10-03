@@ -26,12 +26,9 @@ class AuthenticatedSessionController extends Controller
 
     $user = User::where('username', $request->username)->first();
 
-    if (!$user) {
-        return response()->json(['message' => 'User not found'], 404);
-    }
-
-    if (!Hash::check($request->password, $user->password)) {
-        return response()->json(['message' => 'Password incorrect'], 401);
+    // Uniform failure: never reveal whether the username or the password was wrong.
+    if (!$user || !Hash::check($request->password, $user->password)) {
+        return response()->json(['message' => 'Invalid username or password'], 401);
     }
 
     // Create access token (short-lived - 15 minutes)

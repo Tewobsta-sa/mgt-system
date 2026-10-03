@@ -129,16 +129,32 @@ class RegisteredUserController extends Controller
     public function forgotPassword(Request $request)
     {
         $request->validate([
-            'username' => 'required|string|exists:users,username',
+            'username' => 'required|string',
             'security_answer' => 'required|string',
             'new_password' => 'required|string|min:8|confirmed',
         ]);
 
+        // Lockout after 5 failed answers per username for 30 minutes.
+        $attemptKey = 'forgot_pw_attempts:' . strtolower((string) $request->username);
+        if ((int) \Illuminate\Support\Facades\Cache::get($attemptKey, 0) >= 5) {
+            return response()->json([
+                'error' => 'Too many failed attempts. Please try again in 30 minutes.',
+            ], 429);
+        }
+
         $user = User::where('username', $request->username)->first();
 
-        if (!Hash::check($request->security_answer, $user->security_answer)) {
+        // Uniform failure: same response for unknown user or wrong answer.
+        if (!$user || !Hash::check($request->security_answer, (string) $user?->security_answer)) {
+            \Illuminate\Support\Facades\Cache::put(
+                $attemptKey,
+                (int) \Illuminate\Support\Facades\Cache::get($attemptKey, 0) + 1,
+                now()->addMinutes(30)
+            );
             return response()->json(['error' => 'Incorrect security answer'], 403);
         }
+
+        \Illuminate\Support\Facades\Cache::forget($attemptKey);
 
         // Store the same hash format used by the login verifier.
         $user->password = Hash::make($request->new_password);
@@ -159,13 +175,15 @@ class RegisteredUserController extends Controller
     public function securityQuestion(Request $request)
     {
         $request->validate([
-            'username' => 'required|string|exists:users,username',
+            'username' => 'required|string',
         ]);
 
-        $user = User::where('username', $request->username)->firstOrFail();
+        $user = User::where('username', $request->username)->first();
 
+        // Uniform response for unknown usernames so this endpoint cannot be
+        // used to enumerate accounts; the follow-up answer check will fail anyway.
         return response()->json([
-            'security_question' => $user->security_question,
+            'security_question' => $user?->security_question ?? 'Registered security question',
         ]);
     }
 

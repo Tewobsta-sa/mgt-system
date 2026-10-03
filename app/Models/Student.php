@@ -56,6 +56,11 @@ class Student extends Model
         return $this->belongsTo(User::class, 'flagged_by');
     }
 
+    public function flagEvents()
+    {
+        return $this->hasMany(StudentFlagEvent::class);
+    }
+
     public function targetSection()
     {
         return $this->belongsTo(Section::class, 'target_section_id');

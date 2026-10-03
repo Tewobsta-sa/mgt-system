@@ -78,7 +78,9 @@ Route::middleware('auth:sanctum')->get('/whoami', function () {
 | Authenticated Core API (Protected by 5 Canonical Roles)
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
+// throttle:240 per minute per user — well above normal UI bursts (including
+// rapid QR attendance scans) but caps credential-stuffing and scraping abuse.
+Route::middleware(['auth:sanctum', 'require.init', 'throttle:240,1'])->group(function () {
 
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy']);
     Route::put('/user/update', [RegisteredUserController::class, 'update']);

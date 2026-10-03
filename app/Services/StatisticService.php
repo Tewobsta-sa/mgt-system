@@ -106,38 +106,51 @@ class StatisticService
             ->get()
             ->map(fn ($r) => ['name' => $r->name, 'count' => (int) $r->count]);
 
-        // 8. Weekly registration trend (last 8 weeks)
+        // 8. Weekly registration trend (last 8 weeks) — one query, bucketed in PHP
+        $since = Carbon::today()->subWeeks(7)->startOfWeek();
+        $createdDates = Student::where('created_at', '>=', $since)->pluck('created_at');
         $registrations = [];
         for ($i = 7; $i >= 0; $i--) {
             $weekStart = Carbon::today()->subWeeks($i)->startOfWeek();
             $weekEnd = (clone $weekStart)->endOfWeek();
             $registrations[] = [
                 'week' => $weekStart->format('M d'),
-                'count' => Student::whereBetween('created_at', [$weekStart, $weekEnd])->count(),
+                'count' => $createdDates->filter(
+                    fn ($d) => $d->gte($weekStart) && $d->lte($weekEnd)
+                )->count(),
             ];
         }
         $stats['registration_trend'] = $registrations;
 
         // 9. Recent Activities (with null-safe user handling and descriptive domain categories)
         if ($user && $user->hasRole('super_admin')) {
-            $stats['recent_logs'] = ActivityLog::with('user')
-                ->latest()
-                ->take(6)
-                ->get()
-                ->map(function ($log) {
-                    $meta = self::resolveActionMetadata($log);
-                    return [
-                        'id' => $log->id,
-                        'user' => $log->user?->name ?? 'System',
-                        'action' => $meta['action'],
-                        'category' => $meta['category'],
-                        'badge_type' => $meta['badge_type'],
-                        'time' => $log->created_at ? $log->created_at->diffForHumans() : ''
-                    ];
-                });
+            $stats['recent_logs'] = self::recentLogs();
         }
 
         return $stats;
+    }
+
+    /**
+     * Latest admin-visible activity entries — kept outside the cached stats
+     * payload so cached responses can never leak logs to non-admin roles.
+     */
+    public static function recentLogs(int $limit = 6)
+    {
+        return ActivityLog::with('user')
+            ->latest()
+            ->take($limit)
+            ->get()
+            ->map(function ($log) {
+                $meta = self::resolveActionMetadata($log);
+                return [
+                    'id' => $log->id,
+                    'user' => $log->user?->name ?? 'System',
+                    'action' => $meta['action'],
+                    'category' => $meta['category'],
+                    'badge_type' => $meta['badge_type'],
+                    'time' => $log->created_at ? $log->created_at->diffForHumans() : ''
+                ];
+            });
     }
 
     public static function resolveActionMetadata($log): array

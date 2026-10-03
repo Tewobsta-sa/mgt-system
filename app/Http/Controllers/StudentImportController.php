@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Section;
 use App\Models\Student;
+use App\Services\StudentIdGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -242,7 +243,7 @@ class StudentImportController extends Controller
                     continue;
                 }
 
-                $studentId = $this->generateStudentId($prefix, $round);
+                $studentId = StudentIdGenerator::next($prefix, $round);
 
                 $age = null;
                 if (!empty($payload['birth_date'])) {
@@ -392,63 +393,6 @@ class StudentImportController extends Controller
         });
 
         return $query->exists();
-    }
-
-    private function generateStudentId(string $prefix, ?string $round = null): string
-    {
-        if ($prefix === 'DIS') {
-            if (!$round) {
-                throw new \InvalidArgumentException('Distance track requires a designated round (ዙር).');
-            }
-            $cleanRound = trim($round);
-            $pattern = "{$prefix}/{$cleanRound}/";
-            $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
-
-            $maxSeq = 0;
-            foreach ($existingIds as $id) {
-                $parts = explode('/', $id);
-                $suffix = end($parts);
-                if (is_numeric($suffix)) {
-                    $num = (int) $suffix;
-                    if ($num > $maxSeq) {
-                        $maxSeq = $num;
-                    }
-                }
-            }
-            $nextSeq = $maxSeq + 1;
-            $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
-
-            while (Student::where('student_id', $formattedId)->exists()) {
-                $nextSeq++;
-                $formattedId = sprintf("{$prefix}/{$cleanRound}/%03d", $nextSeq);
-            }
-
-            return $formattedId;
-        }
-
-        $pattern = "{$prefix}/";
-        $existingIds = Student::where('student_id', 'like', "{$pattern}%")->pluck('student_id');
-
-        $maxSeq = 0;
-        foreach ($existingIds as $id) {
-            $parts = explode('/', $id);
-            $suffix = end($parts);
-            if (is_numeric($suffix)) {
-                $num = (int) $suffix;
-                if ($num > $maxSeq) {
-                    $maxSeq = $num;
-                }
-            }
-        }
-        $nextSeq = $maxSeq + 1;
-        $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
-
-        while (Student::where('student_id', $formattedId)->exists()) {
-            $nextSeq++;
-            $formattedId = sprintf("{$prefix}/%03d", $nextSeq);
-        }
-
-        return $formattedId;
     }
 
     private function readRows(\Illuminate\Http\UploadedFile $file): array
