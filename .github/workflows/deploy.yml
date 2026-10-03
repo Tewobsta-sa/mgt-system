@@ -1,53 +1,69 @@
-name: Deploy Laravel App to cPanel
+name: Deploy Backend (Laravel) to cPanel
 
 on:
   push:
     branches:
       - the-so-called-done
+  workflow_dispatch:
 
 jobs:
   ftp-deploy:
-    name: 🚀 Deploy via FTP
+    name: Deploy via FTP
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout your repository
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2️⃣ Setup PHP 8.3 to match your cPanel
+      # Match the PHP version selected in cPanel > MultiPHP Manager
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
+          extensions: mbstring, xml, ctype, json, bcmath, fileinfo, openssl, pdo_mysql, tokenizer, gd
 
-      # 3️⃣ Install Composer dependencies
-      - name: Install PHP dependencies
-        run: composer install --no-dev --optimize-autoloader
+      # Build vendor/ in CI and upload it — most cPanel shared hosts have
+      # no Composer/SSH, so the server can't run `composer install`.
+      - name: Install production dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      # 4️⃣ Optional: Build frontend (if using Laravel Mix / Vite)
-      - name: Build frontend
-        run: |
-          npm install
-          npm run build
-        continue-on-error: true  # skip if no frontend
-
-      # 5️⃣ Upload via FTP (exclude unnecessary files)
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.3
         with:
           server: ${{ secrets.FTP_HOST }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ secrets.FTP_PATH }}  # ensure it ends with '/'
+          server-dir: ${{ secrets.FTP_PATH }} # e.g. /home/cpaneluser/mgt-system/ — must end with '/'
           exclude: |
             **/.git*
             **/.github/**
             node_modules/**
-            vendor/**
             tests/**
             .env
-            *.log
-      # 6️⃣ Optional: Run Laravel commands on cPanel via SSH (if possible)
-      # If you can SSH to cPanel, you can run migrations & cache commands here
-      # Otherwise, run them manually in cPanel terminal
+            .env.*
+            storage/logs/*.log
+            storage/framework/cache/data/**
+            storage/framework/sessions/**
+            storage/framework/views/**
+
+# ────────────────────────────────────────────────────────────────────────────
+# MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
+#
+# 1. Point the domain/subdomain docroot to   mgt-system/public
+#    (cPanel > Domains > document root), NOT the project root — .env must
+#    never be web-accessible.
+#
+# 2. Create .env on the server once (cPanel > File Manager, or SSH):
+#       cp .env.production .env   — then fill in APP_URL, FRONTEND_URL,
+#       and the cPanel MySQL credentials.
+#
+# 3. In cPanel > Terminal (or SSH), from the app directory run ONCE:
+#       php artisan migrate --force
+#       php artisan storage:link
+#       php artisan config:cache && php artisan route:cache
+#    Run `php artisan migrate --force` again after each deploy that adds
+#    migrations, and `php artisan config:cache` after any .env change.
+#
+# 4. Make sure storage/ and bootstrap/cache are writable (chmod -R 775
+#    via File Manager > Change Permissions if uploads fail).
+# ────────────────────────────────────────────────────────────────────────────
