@@ -33,6 +33,7 @@ class StudentImportController extends Controller
         'round',
         'section_name',
         'status',
+        'shift',
     ];
 
     private const FIELD_GUIDE = [
@@ -57,6 +58,7 @@ class StudentImportController extends Controller
         '[MANDATORY for Distance (e.g. 1, 2, 2016), OPTIONAL for others]',
         '[MANDATORY Section Name]',
         '[OPTIONAL: new/regular (default: new)]',
+        '[OPTIONAL: day/night (default: day)]',
     ];
 
     private const SAMPLE_ROW = [
@@ -81,6 +83,7 @@ class StudentImportController extends Controller
         '1',
         'Maekelawyan 5 (Grade 5)',
         'new',
+        'day',
     ];
 
     public function template(?string $track = 'Regular')
@@ -139,6 +142,7 @@ class StudentImportController extends Controller
 
         $created = [];
         $errors = [];
+        $skippedDuplicates = [];
 
         DB::beginTransaction();
         try {
@@ -178,6 +182,22 @@ class StudentImportController extends Controller
                     'subcity' => ['required', 'string', 'max:255'],
                     'woreda' => ['required', 'string', 'max:255'],
                     'section_name' => ['required', 'string', 'max:255'],
+                ], [], [
+                    'name' => 'name',
+                    'christian_name' => 'Christian name',
+                    'birth_date' => 'birth date',
+                    'sex' => 'sex',
+                    'education_level' => 'education level',
+                    'grade_level' => 'grade level',
+                    'occupation_type' => 'occupation type',
+                    'curr_school_or_office' => 'school/office',
+                    'family_guardian_name' => 'guardian name',
+                    'family_guardian_phone' => 'guardian phone',
+                    'emergency_contact_name' => 'emergency contact name',
+                    'emergency_contact_phone' => 'emergency contact phone',
+                    'subcity' => 'subcity',
+                    'woreda' => 'woreda',
+                    'section_name' => 'section name',
                 ]);
 
                 if ($validator->fails()) {
@@ -211,6 +231,17 @@ class StudentImportController extends Controller
                     continue;
                 }
 
+                // Duplicate-student detection: identical name + birth date, or
+                // identical name + shared guardian/own phone -> skip the row.
+                if ($this->isDuplicateRow($payload)) {
+                    $skippedDuplicates[] = [
+                        'row' => $rowNumber,
+                        'name' => $payload['name'],
+                        'reason' => 'Possible duplicate - a student with the same name and birth date/phone already exists.',
+                    ];
+                    continue;
+                }
+
                 $studentId = $this->generateStudentId($prefix, $round);
 
                 $age = null;
@@ -235,9 +266,17 @@ class StudentImportController extends Controller
 
                 $sex = ucfirst(strtolower($payload['sex']));
 
+                $isNight = false;
+                if (isset($payload['shift'])) {
+                    $isNight = in_array(strtolower(trim($payload['shift'])), ['night', '1', 'true', 'yes', 'y']);
+                } elseif (isset($payload['is_night'])) {
+                    $isNight = filter_var($payload['is_night'], FILTER_VALIDATE_BOOLEAN);
+                }
+
                 // Create Student
                 $student = Student::create([
                     'student_id' => $studentId,
+                    'is_night' => $isNight,
                     'name' => $payload['name'],
                     'christian_name' => $payload['christian_name'] ?? null,
                     'birth_date' => $payload['birth_date'] ?? null,
@@ -312,7 +351,47 @@ class StudentImportController extends Controller
             'message' => 'Students imported successfully',
             'created_count' => count($created),
             'created' => $created,
+            'skipped_count' => count($skippedDuplicates),
+            'skipped_duplicates' => $skippedDuplicates,
         ], 201);
+    }
+
+    /**
+     * Duplicate check for an import row: same name + same birth date, or
+     * same name + any shared phone number already registered.
+     */
+    private function isDuplicateRow(array $payload): bool
+    {
+        $name = trim((string) ($payload['name'] ?? ''));
+        if ($name === '') return false;
+
+        $query = Student::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($name)]);
+
+        $phones = array_filter(array_map(
+            fn ($p) => preg_replace('/\D/', '', (string) $p),
+            [
+                $payload['family_guardian_phone'] ?? null,
+                $payload['emergency_contact_phone'] ?? null,
+            ]
+        ));
+
+        // Need at least one secondary field to confirm a duplicate.
+        if (empty($payload['birth_date']) && count($phones) === 0) {
+            return false;
+        }
+
+        $query->where(function ($q) use ($payload, $phones) {
+            if (!empty($payload['birth_date'])) {
+                $q->where('birth_date', $payload['birth_date']);
+            }
+            foreach ($phones as $phone) {
+                if ($phone === '') continue;
+                $q->orWhereRaw("REPLACE(REPLACE(REPLACE(COALESCE(family_guardian_phone,''),' ',''),'-',''),'+','') LIKE ?", ["%{$phone}%"])
+                  ->orWhereRaw("REPLACE(REPLACE(REPLACE(COALESCE(phone_number,''),' ',''),'-',''),'+','') LIKE ?", ["%{$phone}%"]);
+            }
+        });
+
+        return $query->exists();
     }
 
     private function generateStudentId(string $prefix, ?string $round = null): string

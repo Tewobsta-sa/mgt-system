@@ -154,6 +154,15 @@ class MinistryController extends Controller
             'run_auto' => 'nullable|boolean',
             'manual_student_ids' => 'nullable|array',
             'manual_student_ids.*' => 'exists:students,id',
+        ], [], [
+            'ministry_id' => 'ministry',
+            'duration_start_date' => 'start date',
+            'duration_end_date' => 'end date',
+            'mezmur_ids' => 'mezmur songs',
+            'mezmur_ids.*' => 'mezmur song',
+            'auto_threshold' => 'auto assignment threshold',
+            'manual_student_ids' => 'students',
+            'manual_student_ids.*' => 'student',
         ]);
 
         return DB::transaction(function () use ($validated, $user) {
@@ -217,6 +226,15 @@ class MinistryController extends Controller
             'manual_student_ids_add.*' => 'exists:students,id',
             'manual_student_ids_remove' => 'nullable|array',
             'manual_student_ids_remove.*' => 'exists:students,id',
+        ], [], [
+            'ministry_id' => 'ministry',
+            'duration_start_date' => 'start date',
+            'duration_end_date' => 'end date',
+            'mezmur_ids' => 'mezmur songs',
+            'mezmur_ids.*' => 'mezmur song',
+            'auto_threshold' => 'auto assignment threshold',
+            'manual_student_ids_add.*' => 'student',
+            'manual_student_ids_remove.*' => 'student',
         ]);
 
         $assignment = MinistryAssignment::findOrFail($id);
@@ -471,10 +489,11 @@ class MinistryController extends Controller
             'source' => 'nullable|string',
         ]);
 
-        // Enforce rule: ONLY regular students (status != 'new') can be assigned to ministries
+        // Enforce rule: ONLY regular, unflagged students can be assigned to ministries
         $regularStudentIds = Student::whereIn('id', $validated['student_ids'])
             ->where('status', 'regular')
             ->where('status', '!=', 'new')
+            ->where('is_flagged', false)
             ->pluck('id')
             ->toArray();
 

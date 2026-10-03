@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Models\RefreshToken;
+use Spatie\Permission\Models\Role;
 
 class RegisteredUserController extends Controller
 {
@@ -33,7 +34,7 @@ class RegisteredUserController extends Controller
                 'name' => 'required|string|max:255',
                 'username' => 'required|string|unique:users',
                 'password' => 'required|string|min:8|confirmed',
-                'role' => 'required|string|in:super_admin,yesew_habt,tmhrt_kfl,mezmur_kfl,mereja_kfl',
+                'role' => 'required|string|in:super_admin,yesew_habt,tmhrt_kfl,mezmur_kfl,mereja_kfl,teacher',
                 'security_question' => 'required|string|max:255',
                 'security_answer' => 'required|string|max:255',
                 'program_type_ids' => 'nullable|array',
@@ -45,11 +46,18 @@ class RegisteredUserController extends Controller
                 return response()->json(['error' => 'Unauthenticated user'], 401);
             }
 
-            if (!$user->hasRole('super_admin')) {
-                return response()->json(['error' => 'ተጠቃሚዎችን መመዝገብ የሚችለው የበላይ አስተዳዳሪ (Super Admin) ብቻ ነው። (Only Super Admin can register users)'], 403);
+            $targetRole = $request->role;
+
+            // Super admin can register any allowed role; tmhrt_kfl can register teachers only.
+            $canRegister = $user->hasRole('super_admin') ||
+                ($user->hasRole('tmhrt_kfl') && $targetRole === 'teacher');
+
+            if (!$canRegister) {
+                return response()->json(['error' => 'ተጠቃሚዎችን መመዝገብ የሚችለው የበላይ አስተዳዳሪ (Super Admin) ወይም ትምህርት ክፍል (Tmhrt Kfl) ለመምህራን ብቻ ነው።'], 403);
             }
 
-            $targetRole = $request->role;
+            // Ensure the target role exists before assigning it
+            Role::firstOrCreate(['name' => $targetRole, 'guard_name' => 'web']);
 
             $newUser = User::create([
                 'name' => $request->name,
@@ -84,7 +92,9 @@ class RegisteredUserController extends Controller
                 'tmhrt_kfl',
                 'mezmur_kfl',
                 'mereja_kfl',
+                'teacher',
             ],
+            'tmhrt_kfl' => ['teacher'],
             default => []
         };
     }

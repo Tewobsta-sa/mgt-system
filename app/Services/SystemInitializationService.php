@@ -88,7 +88,7 @@ class SystemInitializationService
     public static function ensureRolesExist(): void
     {
         foreach (self::$adminRoles as $roleName) {
-            Role::firstOrCreate(['name' => $roleName]);
+            Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
         }
     }
 }

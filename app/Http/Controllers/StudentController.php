@@ -6,6 +6,7 @@ use App\Models\Student;
 use App\Models\Section;
 use App\Models\ProgramType;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
@@ -90,23 +91,7 @@ class StudentController extends Controller
 
         $query = Student::with(['address', 'contacts', 'section.programType']);
 
-        if (strcasecmp($type, 'PreKG') === 0) {
-            $query->where(function ($q) {
-                $q->whereHas('section.programType', fn($pt) => $pt->where('name', 'PreKG'))
-                  ->orWhereHas('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
-                  ->orWhere('classification', 'prekg');
-            });
-        } elseif (strcasecmp($type, 'Regular') === 0) {
-            $query->where(function ($q) {
-                $q->whereHas('section.programType', fn($pt) => $pt->whereIn('name', ['Regular', 'Young']))
-                  ->where(function ($qq) {
-                      $qq->whereDoesntHave('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
-                        ->orWhereNull('section_id');
-                  });
-            });
-        } elseif (strcasecmp($type, 'Distance') === 0) {
-            $query->whereHas('section.programType', fn($pt) => $pt->where('name', 'Distance'));
-        }
+        $this->applyTrackScope($query, $type);
 
         if ($classification && $classification !== 'all') {
             $query->where('classification', $classification);
@@ -136,6 +121,31 @@ class StudentController extends Controller
         }
 
         return $query->orderBy('id', 'desc')->paginate($request->query('per_page', 10));
+    }
+
+    /**
+     * Apply the same track scoping used by the list endpoints so exports
+     * (e.g. ID cards) return exactly the students shown in each tab.
+     */
+    protected function applyTrackScope($query, string $type)
+    {
+        if (strcasecmp($type, 'PreKG') === 0) {
+            $query->where(function ($q) {
+                $q->whereHas('section.programType', fn($pt) => $pt->where('name', 'PreKG'))
+                  ->orWhereHas('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
+                  ->orWhere('classification', 'prekg');
+            });
+        } elseif (strcasecmp($type, 'Regular') === 0) {
+            $query->where(function ($q) {
+                $q->whereHas('section.programType', fn($pt) => $pt->whereIn('name', ['Regular', 'Young']))
+                  ->where(function ($qq) {
+                      $qq->whereDoesntHave('section', fn($s) => $s->where('name', 'like', '%pre%kg%'))
+                        ->orWhereNull('section_id');
+                  });
+            });
+        } elseif (strcasecmp($type, 'Distance') === 0) {
+            $query->whereHas('section.programType', fn($pt) => $pt->where('name', 'Distance'));
+        }
     }
 
     // ------------------ SHOW ------------------
@@ -228,7 +238,39 @@ class StudentController extends Controller
             'educational_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
         ], [
             'round.required' => 'የየርቀት ትምህርት ተማሪዎች ዙር (Round) ማስገባት ግዴታ ነው። (Round is mandatory for Distance students).',
+        ], [
+            'christian_name' => 'Christian name',
+            'birth_date' => 'birth date',
+            'educational_level' => 'education level',
+            'grade_level' => 'grade level',
+            'occupation_type' => 'occupation',
+            'current_school' => 'current school',
+            'current_office' => 'current office',
+            'family_guardian_name' => 'guardian name',
+            'family_guardian_phone' => 'guardian phone',
+            'emergency_contact_name' => 'emergency contact name',
+            'emergency_contact_phone' => 'emergency contact phone',
+            'phone_number' => 'phone number',
+            'email_address' => 'email',
+            'telegram_user_name' => 'Telegram username',
+            'house_no' => 'house number',
+            'section_id' => 'section',
+            'birth_certificates.*' => 'birth certificate',
+            'educational_certificates.*' => 'educational certificate',
         ]);
+
+        // Duplicate-student guard: same full name + birth date, or same name +
+        // guardian/own phone number already exists -> require explicit override.
+        if (!$request->boolean('allow_duplicate')) {
+            $duplicates = $this->findDuplicateStudents($request);
+            if ($duplicates->isNotEmpty()) {
+                return response()->json([
+                    'message' => 'ተመሳሳይ ተማሪ ቀድሞ ተመዝግቧል። (Possible duplicate student record detected.)',
+                    'duplicate' => true,
+                    'duplicates' => $duplicates,
+                ], 409);
+            }
+        }
 
         $prefix = match (strtolower($track)) {
             'distance' => 'DIS',
@@ -397,6 +439,25 @@ class StudentController extends Controller
             'picture' => 'nullable|image|max:10240',
             'birth_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
             'educational_certificates.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:15360',
+        ], [], [
+            'christian_name' => 'Christian name',
+            'birth_date' => 'birth date',
+            'educational_level' => 'education level',
+            'grade_level' => 'grade level',
+            'occupation_type' => 'occupation',
+            'current_school' => 'current school',
+            'current_office' => 'current office',
+            'family_guardian_name' => 'guardian name',
+            'family_guardian_phone' => 'guardian phone',
+            'emergency_contact_name' => 'emergency contact name',
+            'emergency_contact_phone' => 'emergency contact phone',
+            'phone_number' => 'phone number',
+            'email_address' => 'email',
+            'telegram_user_name' => 'Telegram username',
+            'house_no' => 'house number',
+            'section_id' => 'section',
+            'birth_certificates.*' => 'birth certificate',
+            'educational_certificates.*' => 'educational certificate',
         ]);
 
         return DB::transaction(function () use ($request, $student) {
@@ -525,6 +586,9 @@ class StudentController extends Controller
             'student_ids' => 'required|array|min:1',
             'student_ids.*' => 'exists:students,id',
             'status' => 'required|string|in:new,regular,Active,Inactive',
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
         ]);
 
         $count = Student::whereIn('id', $validated['student_ids'])
@@ -552,12 +616,27 @@ class StudentController extends Controller
             $query->where('section_id', $sectionId);
         }
 
-        if ($classification = $request->input('classification')) {
+        if (($classification = $request->input('classification')) && $classification !== 'all') {
             $query->where('classification', $classification);
         }
 
         if ($track = $request->input('track')) {
-            $query->whereHas('section.programType', fn($pt) => $pt->where('name', $track));
+            $this->applyTrackScope($query, $track);
+        }
+
+        if (($status = $request->input('status')) && $status !== 'all') {
+            $query->where('status', $status);
+        }
+
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN));
+        }
+
+        if ($search = $request->input('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('student_id', 'like', "%{$search}%");
+            });
         }
 
         $students = $query->orderBy('name')->get();
@@ -586,7 +665,12 @@ class StudentController extends Controller
                 'flag_reason' => $s->flag_reason,
                 'grade_level' => $s->grade_level ?? $s->educational_level ?? 'N/A',
                 'address_string' => implode(', ', $addrParts),
+                'address' => $addr ? [
+                    'subcity' => $addr->subcity,
+                    'woreda' => $addr->woreda ?: $addr->district,
+                ] : null,
                 'phone_number' => $s->phone_number,
+                'family_guardian_phone' => $s->family_guardian_phone,
                 'qr_code_data' => json_encode([
                     'sid' => $s->student_id,
                     'name' => $s->name,
@@ -625,6 +709,55 @@ class StudentController extends Controller
         }
         $student->delete();
         return response()->json(['message' => 'Student deleted successfully.'], 200);
+    }
+
+    // ------------------ DUPLICATE DETECTION ------------------
+
+    /**
+     * Find existing students that look like the incoming record:
+     *  - identical name (case-insensitive) AND identical birth date, or
+     *  - identical name AND identical guardian/own phone number.
+     * Returns a lightweight collection for the duplicate-warning UI.
+     */
+    private function findDuplicateStudents(Request $request)
+    {
+        $name = trim((string) $request->input('name'));
+        if ($name === '') {
+            return collect();
+        }
+
+        $birthDate = $request->input('birth_date');
+        $phones = array_filter(array_map(
+            fn ($p) => preg_replace('/\D/', '', (string) $p),
+            [
+                $request->input('family_guardian_phone'),
+                $request->input('phone_number'),
+                $request->input('emergency_contact_phone'),
+            ]
+        ));
+
+        $query = Student::with('section:id,name')
+            ->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($name)]);
+
+        $query->where(function ($q) use ($birthDate, $phones) {
+            $hasClause = false;
+            if ($birthDate) {
+                $q->where('birth_date', $birthDate);
+                $hasClause = true;
+            }
+            foreach ($phones as $phone) {
+                if ($phone === '') continue;
+                $hasClause = true;
+                $q->orWhereRaw("REPLACE(REPLACE(REPLACE(COALESCE(family_guardian_phone,''),' ',''),'-',''),'+','') LIKE ?", ["%{$phone}%"])
+                  ->orWhereRaw("REPLACE(REPLACE(REPLACE(COALESCE(phone_number,''),' ',''),'-',''),'+','') LIKE ?", ["%{$phone}%"]);
+            }
+            if (!$hasClause) {
+                // No secondary evidence: match on identical name only.
+                $q->whereRaw('1 = 1');
+            }
+        });
+
+        return $query->limit(5)->get(['id', 'student_id', 'name', 'birth_date', 'section_id', 'status', 'family_guardian_phone']);
     }
 
     // ------------------ STUDENT ID GENERATION ------------------
@@ -693,6 +826,9 @@ class StudentController extends Controller
         $request->validate([
             'student_ids' => 'required|array',
             'student_ids.*' => 'exists:students,id'
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
         ]);
 
         DB::transaction(function () use ($request) {
@@ -708,6 +844,9 @@ class StudentController extends Controller
         $request->validate([
             'student_ids' => 'required|array',
             'student_ids.*' => 'exists:students,id'
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
         ]);
 
         DB::transaction(function () use ($request) {
@@ -740,7 +879,7 @@ class StudentController extends Controller
     public function flagStudent(Request $request, $id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
             return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can flag students.'], 403);
         }
 
@@ -768,7 +907,7 @@ class StudentController extends Controller
     public function unflagStudent(Request $request, $id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
             return response()->json(['message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት) or Super Admin can unflag students.'], 403);
         }
 

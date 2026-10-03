@@ -115,7 +115,6 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
             Route::get('/young/{id}', [StudentController::class, 'showYoung']);
             Route::get('/distance', [StudentController::class, 'indexDistance']);
             Route::get('/distance/{id}', [StudentController::class, 'showDistance']);
-            Route::get('/id-cards/export', [StudentController::class, 'getStudentsForIdCards']);
             Route::get('/{id}', [StudentController::class, 'showStudent']);
         });
 
@@ -126,8 +125,6 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
             Route::put('/unified/{id}', [StudentController::class, 'updateUnified']);
             Route::post('/bulk-status', [StudentController::class, 'bulkUpdateStatus']);
             Route::delete('/{id}', [StudentController::class, 'destroyStudent']);
-            Route::post('/{id}/flag', [StudentController::class, 'flagStudent']);
-            Route::post('/{id}/unflag', [StudentController::class, 'unflagStudent']);
 
             // Legacy endpoints
             Route::post('/regular', [StudentController::class, 'storeRegular']);
@@ -148,17 +145,33 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
             Route::post('/import/young', [StudentImportController::class, 'import']);
             Route::post('/import/distance', [StudentImportController::class, 'import']);
         });
+
+        // Flagging & ID-card export (Ye Sew Habt office + Super Admin)
+        Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|gngnunet_office_admin'])->group(function () {
+            Route::post('/{id}/flag', [StudentController::class, 'flagStudent']);
+            Route::post('/{id}/unflag', [StudentController::class, 'unflagStudent']);
+            Route::get('/id-cards/export', [StudentController::class, 'getStudentsForIdCards']);
+        });
     });
 
     // ── Verification & Promotion Workflows ───────────────────────────
-    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|tmhrt_kfl'])->group(function () {
+    // Read-only candidate listing (includes Ye Sew Habt office admin & read-only Mereja)
+    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|tmhrt_kfl|gngnunet_office_admin|mereja_kfl'])->group(function () {
         Route::get('/promotions/candidates', [StudentPromotionController::class, 'getCandidates']);
+    });
+
+    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|tmhrt_kfl|gngnunet_office_admin'])->group(function () {
+        Route::post('/promotions/reject', [StudentPromotionController::class, 'reject']);
+    });
+
+    // Legacy verify/promote endpoints — kept for admin tooling only; they bypass the
+    // nominate → endorse → approve workflow so they are restricted to Super Admin.
+    Route::middleware([RoleMiddleware::class . ':super_admin'])->group(function () {
         Route::post('/students/{id}/verify', [StudentPromotionController::class, 'verifyStudent']);
         Route::post('/students/bulk-verify', [StudentPromotionController::class, 'bulkVerify']);
         Route::post('/promote/regular', [StudentPromotionController::class, 'promoteRegular']);
         Route::post('/promote/young', [StudentPromotionController::class, 'promoteYoung']);
         Route::post('/promote/distance', [StudentPromotionController::class, 'promoteDistance']);
-        Route::post('/promotions/reject', [StudentPromotionController::class, 'reject']);
     });
 
     // Level 1: Tmhrt nomination
@@ -167,7 +180,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
     });
 
     // Level 2: Ye Sew Habt endorsement
-    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|gngnunet_office_admin'])->group(function () {
         Route::post('/promotions/endorse', [StudentPromotionController::class, 'endorse']);
     });
 
@@ -226,7 +239,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
     // =========================================================================
     // GRADING & ASSESSMENTS
     // =========================================================================
-    Route::middleware([RoleMiddleware::class . ':super_admin|tmhrt_kfl|mereja_kfl'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|tmhrt_kfl|mereja_kfl|teacher'])->group(function () {
         Route::get('/assessments', [AssessmentController::class, 'index']);
         Route::get('/assessments/{assessment}', [AssessmentController::class, 'show']);
         Route::get('/grades', [GradeController::class, 'index']);
@@ -239,14 +252,18 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
         Route::get('/teacher/my-courses', [TeacherController::class, 'myCourses']);
     });
 
+    Route::middleware([RoleMiddleware::class . ':super_admin|tmhrt_kfl|teacher'])->group(function () {
+        Route::post('/grades', [GradeController::class, 'store']);
+        Route::post('/grades/bulk', [GradeController::class, 'bulkStore']);
+        Route::delete('/grades/{id}', [GradeController::class, 'destroy']);
+        Route::get('/courses/{course}/grades/template', [GradeController::class, 'downloadTemplate']);
+        Route::post('/courses/{course}/grades/import', [GradeController::class, 'importGrades']);
+    });
+
     Route::middleware([RoleMiddleware::class . ':super_admin|tmhrt_kfl'])->group(function () {
         Route::post('/assessments', [AssessmentController::class, 'store']);
         Route::put('/assessments/{assessment}', [AssessmentController::class, 'update']);
         Route::delete('/assessments/{assessment}', [AssessmentController::class, 'destroy']);
-
-        Route::post('/grades', [GradeController::class, 'store']);
-        Route::post('/grades/bulk', [GradeController::class, 'bulkStore']);
-        Route::delete('/grades/{id}', [GradeController::class, 'destroy']);
     });
 
     // =========================================================================
@@ -316,7 +333,7 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
     // =========================================================================
     // SCHEDULES & ASSIGNMENTS & ATTENDANCE
     // =========================================================================
-    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|mereja_kfl|mezmur_kfl|tmhrt_kfl'])->group(function () {
+    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|mereja_kfl|mezmur_kfl|tmhrt_kfl|teacher'])->group(function () {
         Route::get('/assignments', [AssignmentController::class, 'index']);
         Route::get('/assignments/{assignment}', [AssignmentController::class, 'show']);
         Route::get('/schedule', [AssignmentController::class, 'getSchedule']);
@@ -325,15 +342,17 @@ Route::middleware(['auth:sanctum', 'require.init'])->group(function () {
     });
 
     Route::middleware([RoleMiddleware::class . ':super_admin|mezmur_kfl|tmhrt_kfl'])->group(function () {
+        Route::post('/assignments/end-semester', [AssignmentController::class, 'endSemester']);
         Route::post('/assignments', [AssignmentController::class, 'store']);
         Route::put('/assignments/{assignment}', [AssignmentController::class, 'update']);
         Route::patch('/assignments/{assignment}', [AssignmentController::class, 'update']);
         Route::delete('/assignments/{assignment}', [AssignmentController::class, 'destroy']);
     });
 
-    // Attendance Taking: Yesew Habt, Tmhrt, Mezmur, Super Admin
-    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|mezmur_kfl|tmhrt_kfl'])->group(function () {
+    // Attendance Taking: Yesew Habt, Tmhrt, Mezmur, Teacher, Super Admin
+    Route::middleware([RoleMiddleware::class . ':super_admin|yesew_habt|mezmur_kfl|tmhrt_kfl|teacher'])->group(function () {
         Route::post('/attendance/mark', [AttendanceController::class, 'markAttendance']);
+        Route::post('/attendance/bulk', [AttendanceController::class, 'bulkMark']);
         Route::post('/attendance/scan-mark', [AttendanceController::class, 'scanAndMark']);
     });
 

@@ -16,42 +16,183 @@ class ReportController extends Controller
             'students' => $this->exportStudents($request),
             'grades' => $this->exportGrades($request),
             'attendance' => $this->exportAttendance($request),
+            'academic' => $this->exportAcademicStatus($request),
             default => response()->json(['message' => 'Invalid report type'], 400),
         };
     }
 
     /* -----------------------------------------
-     * STUDENTS EXPORT (FIXED)
+     * STUDENTS EXPORT (roster with section/status/track filters)
      * ----------------------------------------- */
     private function exportStudents(Request $request)
     {
         $headers = [
             'Content-Type' => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="students_report.csv"',
+            'Content-Disposition' => 'attachment; filename="students_roster.csv"',
         ];
 
-        $callback = function () {
+        $query = Student::with(['section.programType', 'address']);
+
+        if ($sectionId = $request->input('section_id')) {
+            $query->where('section_id', $sectionId);
+        }
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
+        if ($track = $request->input('track')) {
+            $query->whereHas('section.programType', fn ($q) => $q->where('name', $track));
+        }
+        if ($classification = $request->input('classification')) {
+            $query->where('classification', $classification);
+        }
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN));
+        }
+
+        $callback = function () use ($query) {
             $file = fopen('php://output', 'w');
             // Write UTF-8 BOM so Excel displays Amharic characters correctly
             fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
             fputcsv($file, [
-                'ID',
-                'Name',
                 'Student ID',
+                'Full Name',
+                'Christian Name',
+                'Sex',
+                'Birth Date',
+                'Age',
+                'Grade Level',
+                'Educational Level',
+                'Occupation Type',
+                'Current School',
+                'Current Office',
                 'Section',
-                'Verified',
-                'Birth Date'
+                'Track',
+                'Classification',
+                'Status',
+                'Promotion Status',
+                'Shift',
+                'Mezmur Member',
+                'Flagged',
+                'Phone',
+                'Emergency Contact Name',
+                'Emergency Contact Phone',
+                'Guardian Name',
+                'Guardian Phone',
+                'Subcity',
+                'Woreda',
+                'Registered At',
             ]);
 
-            foreach (Student::with('section')->cursor() as $student) {
+            foreach ($query->orderBy('name')->cursor() as $student) {
                 fputcsv($file, [
-                    $student->id,
-                    $student->name,
                     $student->student_id,
-                    $student->section->name ?? 'N/A',
-                    $student->is_verified ? 'Yes' : 'No',
-                    $student->birth_date ?? 'N/A'
+                    $student->name,
+                    $student->christian_name ?? '',
+                    $student->sex ?? '',
+                    $student->birth_date ?? '',
+                    $student->age ?? '',
+                    $student->grade_level ?? '',
+                    $student->educational_level ?? '',
+                    $student->occupation_type ?? '',
+                    $student->current_school ?? '',
+                    $student->current_office ?? '',
+                    $student->section->name ?? 'Unassigned',
+                    $student->section->programType->name ?? '',
+                    $student->classification ?? '',
+                    $student->status ?? '',
+                    $student->promotion_status ?? 'eligible',
+                    $student->is_night ? 'Night' : 'Day',
+                    $student->is_mezmur ? 'Yes' : 'No',
+                    $student->is_flagged ? 'Yes' : 'No',
+                    $student->phone_number ?? '',
+                    $student->emergency_contact_name ?? '',
+                    $student->emergency_contact_phone ?? '',
+                    $student->family_guardian_name ?? '',
+                    $student->family_guardian_phone ?? '',
+                    $student->address->subcity ?? '',
+                    $student->address->woreda ?? $student->address->district ?? '',
+                    $student->created_at ? date('Y-m-d', strtotime($student->created_at)) : '',
+                ]);
+            }
+
+            fclose($file);
+        };
+
+        return Response::stream($callback, 200, $headers);
+    }
+
+    /* -----------------------------------------
+     * ACADEMIC STATUS EXPORT (per-student grade/attendance/promotion state)
+     * ----------------------------------------- */
+    private function exportAcademicStatus(Request $request)
+    {
+        $headers = [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="academic_status_report.csv"',
+        ];
+
+        $query = Student::with(['section.programType', 'grades.assessment.course', 'attendances.assignment'])
+            ->whereNotIn('status', ['Graduated', 'Inactive']);
+
+        if ($sectionId = $request->input('section_id')) {
+            $query->where('section_id', $sectionId);
+        }
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
+        if ($track = $request->input('track')) {
+            $query->whereHas('section.programType', fn ($q) => $q->where('name', $track));
+        }
+        if ($classification = $request->input('classification')) {
+            $query->where('classification', $classification);
+        }
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN));
+        }
+
+        $students = $query->orderBy('name')->get();
+        $courseMap = \App\Services\PromotionEvaluator::sectionCourseMap($students->pluck('section_id'));
+        $thresholds = \App\Services\PromotionEvaluator::thresholds();
+
+        $callback = function () use ($students, $courseMap, $thresholds) {
+            $file = fopen('php://output', 'w');
+            fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
+
+            fputcsv($file, [
+                'Student ID',
+                'Full Name',
+                'Christian Name',
+                'Section',
+                'Track',
+                'Status',
+                'Promotion Status',
+                'Overall Grade %',
+                'Attendance %',
+                "Eligible (Grade ≥ {$thresholds['min_grade']}%, Attendance ≥ {$thresholds['min_attendance']}%)",
+                'Sessions Attended',
+                'Sessions Total',
+                'Flagged',
+            ]);
+
+            foreach ($students as $student) {
+                $eval = \App\Services\PromotionEvaluator::evaluate($student, $courseMap);
+                $summary = $eval['attendance_summary'];
+
+                fputcsv($file, [
+                    $student->student_id,
+                    $student->name,
+                    $student->christian_name ?? '',
+                    $student->section->name ?? 'Unassigned',
+                    $student->section->programType->name ?? '',
+                    $student->status ?? '',
+                    $student->promotion_status ?? 'eligible',
+                    $eval['overall_grade_avg'] !== null ? $eval['overall_grade_avg'] . '%' : 'No results',
+                    $eval['overall_attendance_avg'] !== null ? $eval['overall_attendance_avg'] . '%' : 'No records',
+                    $eval['is_eligible'] ? 'Yes' : 'No',
+                    $summary['present'],
+                    $summary['total'],
+                    $student->is_flagged ? 'Yes' : 'No',
                 ]);
             }
 
@@ -71,11 +212,16 @@ class ReportController extends Controller
             'Content-Disposition' => 'attachment; filename="academic_report_cards.csv"',
         ];
 
-        $callback = function () {
+        $studentsQuery = Student::with('grades.assessment.course');
+        if ($sectionId = $request->input('section_id')) {
+            $studentsQuery->where('section_id', $sectionId);
+        }
+
+        $callback = function () use ($studentsQuery) {
             $file = fopen('php://output', 'w');
             fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
 
-            foreach (Student::with('grades.assessment.course')->cursor() as $student) {
+            foreach ($studentsQuery->cursor() as $student) {
 
                 fputcsv($file, []);
                 fputcsv($file, [$student->name]);
@@ -178,6 +324,21 @@ class ReportController extends Controller
 
         if ($status = $request->input('status')) {
             $query->where('status', $status);
+        }
+
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $isNight = filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN);
+            $query->whereHas('assignment', fn ($q) => $q->where('is_night', $isNight));
+        }
+
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+        if ($startDate && $endDate) {
+            $query->whereBetween('marked_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59']);
+        } elseif ($startDate) {
+            $query->where('marked_at', '>=', $startDate . ' 00:00:00');
+        } elseif ($endDate) {
+            $query->where('marked_at', '<=', $endDate . ' 23:59:59');
         }
 
         $callback = function () use ($query) {

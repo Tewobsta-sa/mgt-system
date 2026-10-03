@@ -28,6 +28,13 @@ class CourseController extends Controller
             'assessments.*.max_score' => 'required_with:assessments|integer|min:1',
             'assessments.*.weight' => 'required_with:assessments|numeric|min:0|max:100',
             'assessments.*.type' => 'nullable|string|max:100',
+        ], [], [
+            'credit_hour' => 'credit hours',
+            'program_type_name' => 'classification',
+            'assessments.*.title' => 'assessment title',
+            'assessments.*.max_score' => 'assessment max score',
+            'assessments.*.weight' => 'assessment weight',
+            'assessments.*.type' => 'assessment type',
         ]);
 
         $this->assertWeightsSumCorrect($validated['assessments'] ?? []);
@@ -77,6 +84,13 @@ class CourseController extends Controller
             'assessments.*.max_score' => 'required_with:assessments|integer|min:1',
             'assessments.*.weight' => 'required_with:assessments|numeric|min:0|max:100',
             'assessments.*.type' => 'nullable|string|max:100',
+        ], [], [
+            'credit_hour' => 'credit hours',
+            'program_type_name' => 'classification',
+            'assessments.*.title' => 'assessment title',
+            'assessments.*.max_score' => 'assessment max score',
+            'assessments.*.weight' => 'assessment weight',
+            'assessments.*.type' => 'assessment type',
         ]);
 
         if (isset($validated['assessments'])) {

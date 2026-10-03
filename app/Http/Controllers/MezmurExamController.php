@@ -106,6 +106,12 @@ class MezmurExamController extends Controller
             'results.*.score' => 'nullable|numeric|min:0|max:100',
             'results.*.status' => 'required|in:passed,failed,pending',
             'results.*.notes' => 'nullable|string',
+        ], [], [
+            'mezmur_exam_id' => 'exam',
+            'results.*.student_id' => 'student',
+            'results.*.score' => 'score',
+            'results.*.status' => 'result status',
+            'results.*.notes' => 'notes',
         ]);
 
         $examId = $validated['mezmur_exam_id'];
@@ -145,12 +151,17 @@ class MezmurExamController extends Controller
             'mezmur_exam_id' => 'nullable|exists:mezmur_exams,id',
             'student_ids' => 'required|array|min:1',
             'student_ids.*' => 'exists:students,id',
+        ], [], [
+            'mezmur_exam_id' => 'exam',
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
         ]);
 
-        // Only regular (not new) students can be forwarded
+        // Only regular (not new, not flagged) students can be forwarded
         $regularStudentIds = Student::whereIn('id', $validated['student_ids'])
             ->where('status', 'regular')
             ->where('status', '!=', 'new')
+            ->where('is_flagged', false)
             ->pluck('id');
 
         $query = MezmurExamResult::whereIn('student_id', $regularStudentIds)
@@ -192,7 +203,8 @@ class MezmurExamController extends Controller
             })
             ->whereHas('student', function ($q) {
                 $q->where('status', 'regular')
-                  ->where('status', '!=', 'new');
+                  ->where('status', '!=', 'new')
+                  ->where('is_flagged', false);
             });
 
         if ($search) {

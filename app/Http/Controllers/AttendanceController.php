@@ -7,6 +7,7 @@ use App\Models\Assignment;
 use App\Models\Student;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class AttendanceController extends Controller
 {
@@ -27,9 +28,15 @@ class AttendanceController extends Controller
         $assignment = Assignment::with('section')->findOrFail($validated['assignment_id']);
         $student = Student::with('section')->findOrFail($validated['student_id']);
 
-        if (!($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
+        $canMark = $user->hasRole('super_admin') 
+            || $user->hasRole('yesew_habt') 
+            || ($user->hasRole('tmhrt_kfl') && $assignment->type === 'Course') 
+            || ($user->hasRole('mezmur_kfl') && $assignment->type === 'MezmurTraining') 
+            || ($user->hasRole('teacher') && $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists());
+
+        if (!$canMark) {
             return response()->json([
-                'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can record attendance.'
+                'message' => 'Forbidden: You do not have permission to record attendance for this session.'
             ], 403);
         }
 
@@ -54,36 +61,6 @@ class AttendanceController extends Controller
         }
 
         $status = $validated['status'];
-        $lateMinutes = null;
-
-        // Auto-mark as Late if marked > 30 minutes after program start time
-        if ($assignment->start_time && in_array($status, ['Present', 'Late'])) {
-            try {
-                $now = now();
-                $startHour = (int) substr($assignment->start_time, 0, 2);
-                
-                if ($assignment->scheduled_date) {
-                    $baseDate = $assignment->scheduled_date;
-                } else {
-                    // For recurring: if session starts in evening (>= 17:00) and current time is early morning (< 07:00),
-                    // the session started yesterday evening.
-                    if ($startHour >= 17 && $now->hour < 7) {
-                        $baseDate = $now->copy()->subDay()->toDateString();
-                    } else {
-                        $baseDate = $now->toDateString();
-                    }
-                }
-
-                $sessionStart = \Carbon\Carbon::parse($baseDate . ' ' . $assignment->start_time);
-                $diffMinutes = (int) $sessionStart->diffInMinutes($now, false);
-
-                if ($diffMinutes > 30 && $diffMinutes < 720) {
-                    $status = 'Late';
-                    $lateMinutes = $diffMinutes;
-                }
-            } catch (\Exception $e) {}
-        }
-
         $sessionDate = $validated['session_date'] ?? $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
 
         $attendance = Attendance::updateOrCreate(
@@ -94,17 +71,17 @@ class AttendanceController extends Controller
             ],
             [
                 'status' => $status,
-                'late_minutes' => $lateMinutes,
+                'late_minutes' => null,
                 'marked_by_user_id' => $user->id,
                 'marked_at' => now(),
             ]
         );
 
-        $msg = $status === 'Late' && $lateMinutes 
-            ? "Attendance recorded: marked as Late ({$lateMinutes} mins after start time)" 
-            : "Attendance recorded ({$status})";
-
-        return response()->json(['message' => $msg, 'attendance' => $attendance, 'status' => $status], 200);
+        return response()->json([
+            'message' => "Attendance recorded ({$status})",
+            'attendance' => $attendance,
+            'status' => $status
+        ], 200);
     }
 
     public function getAttendance(Request $request)
@@ -281,34 +258,6 @@ class AttendanceController extends Controller
             ], 422);
         }
 
-        $lateMinutes = null;
-
-        // Auto-mark as Late if scanned > 30 minutes after program start time
-        if ($assignment->start_time && in_array($status, ['Present', 'Late'])) {
-            try {
-                $now = now();
-                $startHour = (int) substr($assignment->start_time, 0, 2);
-                
-                if ($assignment->scheduled_date) {
-                    $baseDate = $assignment->scheduled_date;
-                } else {
-                    if ($startHour >= 17 && $now->hour < 7) {
-                        $baseDate = $now->copy()->subDay()->toDateString();
-                    } else {
-                        $baseDate = $now->toDateString();
-                    }
-                }
-
-                $sessionStart = \Carbon\Carbon::parse($baseDate . ' ' . $assignment->start_time);
-                $diffMinutes = (int) $sessionStart->diffInMinutes($now, false);
-
-                if ($diffMinutes > 30 && $diffMinutes < 720) {
-                    $status = 'Late';
-                    $lateMinutes = $diffMinutes;
-                }
-            } catch (\Exception $e) {}
-        }
-
         // 3. Record attendance
         $sessionDate = $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
 
@@ -320,15 +269,13 @@ class AttendanceController extends Controller
             ],
             [
                 'status' => $status,
-                'late_minutes' => $lateMinutes,
+                'late_minutes' => null,
                 'marked_by_user_id' => $user->id,
                 'marked_at' => now(),
             ]
         );
 
-        $feedbackMsg = $status === 'Late' && $lateMinutes 
-            ? "{$student->name} marked as Late ({$lateMinutes} mins after start time)!" 
-            : "{$student->name} marked as {$status}!";
+        $feedbackMsg = "{$student->name} marked as {$status}!";
 
         return response()->json([
             'message' => $feedbackMsg,
@@ -341,7 +288,7 @@ class AttendanceController extends Controller
                 'section_name' => $student->section?->name ?? 'Unassigned',
                 'picture_url' => $student->picture_url,
                 'status' => $status,
-                'late_minutes' => $lateMinutes,
+                'late_minutes' => null,
                 'marked_at' => now()->format('H:i:s'),
             ],
         ], 200);
@@ -369,6 +316,14 @@ class AttendanceController extends Controller
             'teacher',
             'trainer'
         ])->findOrFail($assignmentId);
+
+        if ($user->hasRole('teacher')) {
+            $isOwnAssignment = $assignment->user_id === $user->id
+                || $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists();
+            if (!$isOwnAssignment) {
+                return response()->json(['message' => 'Forbidden: You are not assigned to this class.'], 403);
+            }
+        }
 
         // Fetch students eligible for this assignment
         $studentsQuery = Student::query();
@@ -447,5 +402,74 @@ class AttendanceController extends Controller
             ],
             'students' => $roster,
         ]);
+    }
+
+    /**
+     * 👥 Bulk mark attendance for multiple selected students
+     */
+    public function bulkMark(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $validated = $request->validate([
+            'assignment_id' => 'required|exists:assignments,id',
+            'student_ids'   => 'required|array|min:1',
+            'student_ids.*' => 'required|exists:students,id',
+            'status'        => 'required|in:Present,Absent,Excused',
+            'session_date'  => 'nullable|date',
+        ], [], [
+            'assignment_id' => 'assignment',
+            'student_ids'   => 'students',
+            'status'        => 'attendance status',
+            'session_date'  => 'session date',
+        ]);
+
+        $assignment = Assignment::with(['section', 'assignmentCourses'])->findOrFail($validated['assignment_id']);
+
+        $canMark = $user->hasRole('super_admin') 
+            || $user->hasRole('yesew_habt') 
+            || ($user->hasRole('tmhrt_kfl') && $assignment->type === 'Course') 
+            || ($user->hasRole('mezmur_kfl') && $assignment->type === 'MezmurTraining') 
+            || ($user->hasRole('teacher') && $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists());
+
+        if (!$canMark) {
+            return response()->json([
+                'message' => 'Forbidden: You do not have permission to record attendance for this session.'
+            ], 403);
+        }
+
+        $sessionDate = $validated['session_date'] ?? $request->input('session_date') ?? $assignment->scheduled_date ?? now()->toDateString();
+        $status = $validated['status'];
+        $now = now();
+        $savedCount = 0;
+
+        DB::transaction(function () use ($validated, $assignment, $sessionDate, $status, $now, $user, &$savedCount) {
+            foreach ($validated['student_ids'] as $studentId) {
+                Attendance::updateOrCreate(
+                    [
+                        'assignment_id' => $assignment->id,
+                        'student_id'    => $studentId,
+                        'session_date'  => $sessionDate,
+                    ],
+                    [
+                        'status'            => $status,
+                        'late_minutes'      => null,
+                        'marked_by_user_id' => $user->id,
+                        'marked_at'         => $now,
+                    ]
+                );
+                $savedCount++;
+            }
+        });
+
+        return response()->json([
+            'message' => "Successfully marked {$savedCount} student(s) as {$status}.",
+            'saved_count' => $savedCount,
+            'status' => $status,
+            'session_date' => $sessionDate,
+        ], 200);
     }
 }

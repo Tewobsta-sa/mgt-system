@@ -7,6 +7,8 @@ use App\Models\Grade;
 use App\Models\Assessment;
 use App\Models\Student;
 use App\Models\Assignment;
+use App\Models\Course;
+use App\Models\AssignmentCourse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -26,6 +28,11 @@ class GradeController extends Controller
             'grades.*.assessment_id' => 'required|exists:assessments,id',
             'grades.*.student_id'    => 'required|exists:students,id',
             'grades.*.score'         => 'nullable|numeric|min:0',
+        ], [], [
+            'grades'                 => 'grade entries',
+            'grades.*.assessment_id' => 'assessment',
+            'grades.*.student_id'    => 'student',
+            'grades.*.score'         => 'score',
         ]);
 
         $saved = [];
@@ -44,8 +51,13 @@ class GradeController extends Controller
                     continue;
                 }
 
-                if (!$user->hasRole('super_admin') && !$user->hasRole('tmhrt_kfl')) {
-                    $errors[] = ['index' => $i, 'message' => 'Unauthorized: Only Tmhrt Kfl or Super Admin can enter grades'];
+                if (!$user->hasRole('super_admin') && !$user->hasRole('tmhrt_kfl') && !$user->hasRole('teacher')) {
+                    $errors[] = ['index' => $i, 'message' => 'Unauthorized: Only Tmhrt Kfl, Super Admin or assigned teachers can enter grades'];
+                    continue;
+                }
+
+                if ($user->hasRole('teacher') && !$this->teacherCanGrade($user, $assessment->course_id, $row['student_id'])) {
+                    $errors[] = ['index' => $i, 'message' => 'Forbidden: You are not assigned to grade this student'];
                     continue;
                 }
 
@@ -115,8 +127,8 @@ class GradeController extends Controller
         return response()->json(['message' => 'Unauthorized'], 401);
     }
 
-    if (!($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
-        return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl or Super Admin can record grades.'], 403);
+    if (!($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
+        return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl, Super Admin or assigned teachers can record grades.'], 403);
     }
 
     $data = $request->validate([
@@ -126,6 +138,10 @@ class GradeController extends Controller
     ]);
 
     $assessment = Assessment::findOrFail($data['assessment_id']);
+
+    if ($user->hasRole('teacher') && !$this->teacherCanGrade($user, $assessment->course_id, $data['student_id'])) {
+        return response()->json(['message' => 'Forbidden: You are not assigned to grade this student'], 403);
+    }
 
     if ($data['score'] > $assessment->max_score) {
         return response()->json([
@@ -162,7 +178,16 @@ class GradeController extends Controller
     // Optional: GET /api/grades?student_id= &assessment_id=
     public function index(Request $request)
     {
+        $user = Auth::user();
         $query = Grade::with(['assessment.course','student']);
+
+        if ($user && $user->hasRole('teacher')) {
+            $query->whereHas('assessment.course', function ($q) use ($user) {
+                $q->whereHas('assignmentCourses', fn ($ac) =>
+                    $ac->where('teacher_id', $user->id)
+                );
+            });
+        }
 
         if ($request->filled('student_id')) {
             $query->where('student_id', $request->student_id);
@@ -179,11 +204,20 @@ class GradeController extends Controller
     public function destroy($id)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
-            return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl or Super Admin can delete grades.'], 403);
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('teacher'))) {
+            return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl, Super Admin or assigned teachers can delete grades.'], 403);
         }
 
-        $grade = Grade::findOrFail($id);
+        $grade = Grade::with('assessment.course')->findOrFail($id);
+
+        if ($user->hasRole('teacher')) {
+            $studentId = $grade->student_id;
+            $courseId = $grade->assessment?->course_id;
+            if (!$courseId || !$this->teacherCanGrade($user, $courseId, $studentId)) {
+                return response()->json(['message' => 'Forbidden: You are not assigned to grade this student'], 403);
+            }
+        }
+
         $grade->delete();
         return response()->json(null, 204);
     }
@@ -297,5 +331,286 @@ public function gradesForCourse($courseId)
     ]);
 }
 
+    protected function teacherCanAccessCourse($user, $courseId): bool
+    {
+        return AssignmentCourse::where('teacher_id', $user->id)
+            ->where('course_id', $courseId)
+            ->exists();
+    }
+
+    private function readCsvFile(string $path): array
+    {
+        $rows = [];
+        $handle = fopen($path, 'r');
+        if (!$handle) return $rows;
+
+        $content = stream_get_contents($handle);
+        fclose($handle);
+
+        // Strip UTF-8 BOM
+        $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
+
+        $tmp = fopen('php://temp', 'r+');
+        fwrite($tmp, $content);
+        rewind($tmp);
+
+        while (($row = fgetcsv($tmp)) !== false) {
+            $rows[] = $row;
+        }
+        fclose($tmp);
+
+        return $rows;
+    }
+
+    /**
+     * 📥 GET /api/courses/{course}/grades/template
+     * Download a CSV template prefilled with enrolled students and columns for each assessment.
+     */
+    public function downloadTemplate(Request $request, $courseId)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $course = Course::with('assessments')->findOrFail($courseId);
+
+        if ($user->hasRole('teacher') && !$this->teacherCanAccessCourse($user, $course->id)) {
+            return response()->json(['message' => 'Forbidden: You are not assigned to this course'], 403);
+        }
+
+        $sectionId = $request->input('section_id');
+
+        // Fetch sections where this course is assigned
+        $sectionIds = Assignment::where('type', 'Course')
+            ->whereHas('assignmentCourses', fn ($q) => $q->where('course_id', $course->id))
+            ->pluck('section_id')
+            ->unique();
+
+        if ($user->hasRole('teacher')) {
+            $teacherSectionIds = Assignment::where('type', 'Course')
+                ->where(function ($q) use ($user, $course) {
+                    $q->where('user_id', $user->id)
+                      ->orWhereHas('assignmentCourses', fn ($qq) => $qq->where('teacher_id', $user->id)
+                                                                      ->where('course_id', $course->id));
+                })
+                ->whereHas('assignmentCourses', fn ($q) => $q->where('course_id', $course->id))
+                ->pluck('section_id')
+                ->unique();
+            $sectionIds = $sectionIds->intersect($teacherSectionIds);
+        }
+
+        if ($sectionId) {
+            $filterIds = [(int) $sectionId];
+        } elseif ($sectionIds->isNotEmpty()) {
+            $filterIds = $sectionIds->values()->all();
+        } elseif ($course->program_type_id) {
+            $filterIds = \App\Models\Section::where('program_type_id', $course->program_type_id)->pluck('id')->all();
+        } else {
+            $filterIds = \App\Models\Section::pluck('id')->all();
+        }
+
+        $students = Student::notFlagged()
+            ->with([
+                'section',
+                'grades' => fn ($q) => $q->whereHas('assessment', fn ($qq) => $qq->where('course_id', $course->id)),
+            ])
+            ->whereIn('section_id', $filterIds)
+            ->orderBy('name')
+            ->get();
+
+        $assessments = $course->assessments->sortBy('id');
+
+        $headers = [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"grades_template_course_{$course->id}.csv\"",
+        ];
+
+        $callback = function () use ($students, $assessments) {
+            $file = fopen('php://output', 'w');
+            // Write UTF-8 BOM so Excel opens with proper Amharic/UTF-8 encoding
+            fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
+
+            $headerRow = ['Student ID', 'Full Name', 'Christian Name', 'Section'];
+            foreach ($assessments as $a) {
+                $headerRow[] = "{$a->title} (Max: {$a->max_score}) [ID: {$a->id}]";
+            }
+            fputcsv($file, $headerRow);
+
+            foreach ($students as $s) {
+                $gradesByAssessment = $s->grades->keyBy('assessment_id');
+                $row = [
+                    $s->student_id,
+                    $s->name,
+                    $s->christian_name ?? '',
+                    $s->section?->name ?? '',
+                ];
+                foreach ($assessments as $a) {
+                    $existingGrade = $gradesByAssessment->get($a->id);
+                    $row[] = $existingGrade ? $existingGrade->score : '';
+                }
+                fputcsv($file, $row);
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * 📤 POST /api/courses/{course}/grades/import
+     * Import a CSV file with student grades.
+     */
+    public function importGrades(Request $request, $courseId)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        if (!$user->hasRole('super_admin') && !$user->hasRole('tmhrt_kfl') && !$user->hasRole('teacher')) {
+            return response()->json(['message' => 'Forbidden: Only Tmhrt Kfl, Super Admin or assigned teachers can import grades'], 403);
+        }
+
+        $course = Course::with('assessments')->findOrFail($courseId);
+
+        if ($user->hasRole('teacher') && !$this->teacherCanAccessCourse($user, $course->id)) {
+            return response()->json(['message' => 'Forbidden: You are not assigned to this course'], 403);
+        }
+
+        $request->validate([
+            'file' => 'required|file|mimes:csv,txt|max:5120',
+        ]);
+
+        $file = $request->file('file');
+        $rows = $this->readCsvFile($file->getRealPath());
+
+        if (empty($rows)) {
+            return response()->json(['message' => 'Empty CSV file'], 422);
+        }
+
+        $headerRow = array_shift($rows);
+        if (!$headerRow) {
+            return response()->json(['message' => 'CSV file has no headers'], 422);
+        }
+
+        $assessments = $course->assessments->keyBy('id');
+        $assessmentsByTitle = $course->assessments->keyBy(fn($a) => strtolower(trim($a->title)));
+
+        $assessmentColMap = []; // colIndex => Assessment
+        $studentIdCol = null;
+
+        foreach ($headerRow as $idx => $header) {
+            $h = trim((string) $header);
+            $lowerH = strtolower($h);
+
+            if (in_array($lowerH, ['student id', 'studentid', 'student_id', 'id'])) {
+                $studentIdCol = $idx;
+                continue;
+            }
+
+            // Check if [ID: \d+] exists in header
+            if (preg_match('/\[ID:\s*(\d+)\]/i', $h, $matches)) {
+                $aid = (int) $matches[1];
+                if (isset($assessments[$aid])) {
+                    $assessmentColMap[$idx] = $assessments[$aid];
+                    continue;
+                }
+            }
+
+            // Check by title match: e.g. "Mid Exam (Max: 30)" -> "mid exam"
+            $cleanedTitle = preg_replace('/\s*\(max:.*?\)/i', '', $lowerH);
+            $cleanedTitle = trim($cleanedTitle);
+            if (isset($assessmentsByTitle[$cleanedTitle])) {
+                $assessmentColMap[$idx] = $assessmentsByTitle[$cleanedTitle];
+                continue;
+            }
+        }
+
+        if ($studentIdCol === null) {
+            return response()->json(['message' => "CSV must contain a 'Student ID' column."], 422);
+        }
+
+        if (empty($assessmentColMap)) {
+            return response()->json([
+                'message' => "No matching assessment columns found in the CSV. Please use the downloaded template.",
+            ], 422);
+        }
+
+        $savedCount = 0;
+        $studentsProcessed = [];
+        $errors = [];
+
+        DB::beginTransaction();
+        try {
+            foreach ($rows as $rowIndex => $row) {
+                $rowNum = $rowIndex + 2;
+                $studentIdVal = isset($row[$studentIdCol]) ? trim((string)$row[$studentIdCol]) : '';
+
+                if ($studentIdVal === '' || str_starts_with($studentIdVal, '#')) {
+                    continue;
+                }
+
+                $student = Student::where('student_id', $studentIdVal)
+                    ->orWhere('id', is_numeric($studentIdVal) ? (int)$studentIdVal : 0)
+                    ->first();
+
+                if (!$student) {
+                    $errors[] = "Row {$rowNum}: Student '{$studentIdVal}' not found in database.";
+                    continue;
+                }
+
+                if ($user->hasRole('teacher') && !$this->teacherCanGrade($user, $course->id, $student->id)) {
+                    $errors[] = "Row {$rowNum}: Not permitted to grade student {$student->name} ({$studentIdVal}).";
+                    continue;
+                }
+
+                foreach ($assessmentColMap as $colIdx => $assessment) {
+                    $scoreVal = isset($row[$colIdx]) ? trim((string)$row[$colIdx]) : '';
+
+                    if ($scoreVal === '') {
+                        continue;
+                    }
+
+                    if (!is_numeric($scoreVal)) {
+                        $errors[] = "Row {$rowNum}: Invalid non-numeric score '{$scoreVal}' for '{$assessment->title}'.";
+                        continue;
+                    }
+
+                    $scoreNum = (float) $scoreVal;
+                    if ($scoreNum < 0) {
+                        $errors[] = "Row {$rowNum}: Negative score '{$scoreNum}' for '{$assessment->title}'.";
+                        continue;
+                    }
+
+                    if ($scoreNum > (float) $assessment->max_score) {
+                        $errors[] = "Row {$rowNum}: Score {$scoreNum} exceeds max allowed ({$assessment->max_score}) for '{$assessment->title}'.";
+                        continue;
+                    }
+
+                    Grade::updateOrCreate(
+                        ['assessment_id' => $assessment->id, 'student_id' => $student->id],
+                        ['score' => $scoreNum]
+                    );
+
+                    $savedCount++;
+                    $studentsProcessed[$student->id] = true;
+                }
+            }
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Import failed: ' . $e->getMessage()], 500);
+        }
+
+        return response()->json([
+            'message' => "Successfully imported {$savedCount} grade(s) for " . count($studentsProcessed) . " student(s).",
+            'saved_count' => $savedCount,
+            'students_count' => count($studentsProcessed),
+            'errors' => $errors,
+        ]);
+    }
 }
 

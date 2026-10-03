@@ -98,7 +98,7 @@ class TeacherController extends Controller
             $sectionIds = $sectionIds->intersect($teacherSectionIds);
         }
 
-        $isAdmin = $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('tmhrt_office_admin') || $user->hasRole('yesew_habt');
+        $isAdmin = $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl') || $user->hasRole('mereja_kfl');
 
         if ($isAdmin) {
             if ($sectionId) {

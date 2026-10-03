@@ -138,10 +138,9 @@ class AdminManagementService
             
             // Define which roles each admin can manage
             $manageableRoles = match ($currentUserRole) {
-                'yesew_habt', 'gngnunet_office_admin' => ['teacher', 'student'],
-                'mezmur_kfl', 'mezmur_office_admin' => ['mezmur_office_coordinator', 'teacher', 'student'],
-                'tmhrt_kfl', 'tmhrt_office_admin' => ['tmhrt_office_coordinator', 'teacher', 'student'],
-                'distance_admin' => ['distance_coordinator', 'teacher', 'student'],
+                'yesew_habt' => ['student'],
+                'mezmur_kfl' => ['teacher', 'student'],
+                'tmhrt_kfl' => ['teacher', 'student'],
                 default => []
             };
 

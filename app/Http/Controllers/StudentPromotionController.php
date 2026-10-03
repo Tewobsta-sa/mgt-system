@@ -31,7 +31,12 @@ class StudentPromotionController extends Controller
             'approver:id,name,username',
             'grades.assessment.course',
             'attendances.assignment',
-        ]);
+        ])
+            // Keep the candidate pool consistent with PromotionEvaluator::countEligible()
+            // and dashboard stats: graduated/inactive students are never candidates.
+            // Flagged (suspended) students are barred from the promotion pipeline.
+            ->whereNotIn('status', ['Graduated', 'Inactive'])
+            ->where('is_flagged', false);
 
         // Filter by section if specified
         if ($request->filled('section_id')) {
@@ -47,7 +52,7 @@ class StudentPromotionController extends Controller
 
         $isSuperAdmin = $user->hasRole('super_admin');
         $isTmhrt = $isSuperAdmin || $user->hasRole('tmhrt_kfl');
-        $isYesew = $isSuperAdmin || $user->hasRole('yesew_habt');
+        $isYesew = $isSuperAdmin || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin');
 
         // Filter by promotion status tab (eligible, nominated_tmhrt, endorsed_yesew, promoted, all)
         if ($request->filled('promotion_status') && $request->promotion_status !== 'all') {
@@ -63,7 +68,7 @@ class StudentPromotionController extends Controller
             }
         } elseif (!$request->filled('promotion_status')) {
             // Yesew Habt without filter only sees candidates sent by Tmhrt Kfl
-            if ($user->hasRole('yesew_habt') && !$isSuperAdmin && !$user->hasRole('tmhrt_kfl')) {
+            if (($user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin')) && !$isSuperAdmin && !$user->hasRole('tmhrt_kfl')) {
                 $query->whereIn('promotion_status', ['nominated_tmhrt', 'nominated', 'endorsed_yesew']);
             }
         }
@@ -91,148 +96,31 @@ class StudentPromotionController extends Controller
 
         // Pre-fetch courses assigned to the students' current sections to avoid historical grade pollution
         $sectionIds = $students->pluck('section_id')->filter()->unique();
-        $sectionCourseMap = [];
-        if ($sectionIds->isNotEmpty()) {
-            $assignments = \App\Models\Assignment::whereIn('section_id', $sectionIds)
-                ->where('type', 'Course')
-                ->with('assignmentCourses')
-                ->get();
-            foreach ($assignments as $asn) {
-                foreach ($asn->assignmentCourses as $ac) {
-                    $sectionCourseMap[$asn->section_id][$ac->course_id] = true;
-                }
-            }
-        }
+        $sectionCourseMap = \App\Services\PromotionEvaluator::sectionCourseMap($sectionIds);
+        $thresholds = \App\Services\PromotionEvaluator::thresholds();
+        $minGrade = $thresholds['min_grade'];
+        $minAttendance = $thresholds['min_attendance'];
+
+        // When explicitly requested (Level-1 tab "view all"), include students
+        // who do NOT meet the thresholds so both groups are visible.
+        $includeIneligible = $request->boolean('include_ineligible');
 
         $candidates = [];
 
         foreach ($students as $student) {
             // 1. Calculate Grade & Academic Performance strictly scoped to current section
-            $currentSectionCourses = $student->section_id && isset($sectionCourseMap[$student->section_id])
-                ? array_keys($sectionCourseMap[$student->section_id])
-                : null;
+            $eval = \App\Services\PromotionEvaluator::evaluate($student, $sectionCourseMap);
 
-            $courseScores = [];
-            $allAssessments = [];
-            $totalEarnedPoints = 0;
-            $totalMaxPoints = 0;
+            $overallGradeAvg = $eval['overall_grade_avg'];
+            $coursesBreakdown = $eval['courses_breakdown'];
+            $overallAttendanceAvg = $eval['overall_attendance_avg'];
+            $courseAttendanceAvg = $eval['course_attendance_avg'];
+            $mezmurAttendanceAvg = $eval['mezmur_attendance_avg'];
+            $attendanceSummary = $eval['attendance_summary'];
+            $sessionLogs = $eval['session_logs'];
+            $isEligible = $eval['is_eligible'];
 
-            foreach ($student->grades as $grade) {
-                $assessment = $grade->assessment;
-                if (!$assessment || !$assessment->course) continue;
-
-                $courseId = $assessment->course_id;
-
-                // Only evaluate courses assigned to the student's current section if assignments exist
-                if ($currentSectionCourses !== null && !empty($currentSectionCourses) && !in_array($courseId, $currentSectionCourses)) {
-                    continue;
-                }
-
-                $courseName = $assessment->course->name;
-
-                if (!isset($courseScores[$courseId])) {
-                    $courseScores[$courseId] = [
-                        'course_id' => $courseId,
-                        'course_name' => $courseName,
-                        'sum_weighted' => 0,
-                        'sum_weights' => 0,
-                        'assessments' => [],
-                    ];
-                }
-
-                $rawScore = (float) $grade->score;
-                $maxScore = (float) $assessment->max_score;
-                $weight = (float) ($assessment->weight ?: 100);
-
-                $contribution = $maxScore > 0 ? ($rawScore / $maxScore) * $weight : 0;
-                $courseScores[$courseId]['sum_weighted'] += $contribution;
-                $courseScores[$courseId]['sum_weights'] += $weight;
-
-                $courseScores[$courseId]['assessments'][] = [
-                    'assessment_id' => $assessment->id,
-                    'title' => $assessment->title,
-                    'raw_score' => round($rawScore, 1),
-                    'max_score' => round($maxScore, 1),
-                    'weight' => round($weight, 1),
-                    'percentage' => $maxScore > 0 ? round(($rawScore / $maxScore) * 100, 1) : 0,
-                ];
-
-                $totalEarnedPoints += $rawScore;
-                $totalMaxPoints += $maxScore;
-            }
-
-            $coursesBreakdown = [];
-            $overallPercentages = [];
-            foreach ($courseScores as $cId => $cData) {
-                $cPercent = $cData['sum_weights'] > 0 
-                    ? round(($cData['sum_weighted'] / $cData['sum_weights']) * 100, 1)
-                    : 0;
-                $overallPercentages[] = $cPercent;
-                $coursesBreakdown[] = [
-                    'course_id' => $cId,
-                    'course_name' => $cData['course_name'],
-                    'percentage' => $cPercent,
-                    'assessments' => $cData['assessments'],
-                ];
-            }
-
-            $overallGradeAvg = count($overallPercentages) > 0 
-                ? round(array_sum($overallPercentages) / count($overallPercentages), 1)
-                : null;
-
-            // 2. Calculate Attendance Performance
-            $courseSessions = ['total' => 0, 'present' => 0, 'absent' => 0, 'excused' => 0];
-            $mezmurSessions = ['total' => 0, 'present' => 0, 'absent' => 0, 'excused' => 0];
-            $sessionLogs = [];
-
-            foreach ($student->attendances as $att) {
-                $type = $att->assignment?->type ?? 'Course';
-                $status = $att->status;
-
-                $sessionLogs[] = [
-                    'id' => $att->id,
-                    'type' => $type,
-                    'status' => $status,
-                    'marked_at' => $att->marked_at ? date('Y-m-d H:i', strtotime($att->marked_at)) : null,
-                    'date' => $att->assignment?->scheduled_date ?? ($att->marked_at ? date('Y-m-d', strtotime($att->marked_at)) : '-'),
-                ];
-
-                if ($type === 'MezmurTraining') {
-                    $mezmurSessions['total']++;
-                    if ($status === 'Present') $mezmurSessions['present']++;
-                    elseif ($status === 'Excused') $mezmurSessions['excused']++;
-                    else $mezmurSessions['absent']++;
-                } else {
-                    $courseSessions['total']++;
-                    if ($status === 'Present') $courseSessions['present']++;
-                    elseif ($status === 'Excused') $courseSessions['excused']++;
-                    else $courseSessions['absent']++;
-                }
-            }
-
-            $totalSessions = $courseSessions['total'] + $mezmurSessions['total'];
-            $totalPresent = $courseSessions['present'] + $mezmurSessions['present'];
-            $totalExcused = $courseSessions['excused'] + $mezmurSessions['excused'];
-            $totalAbsent = $courseSessions['absent'] + $mezmurSessions['absent'];
-
-            $overallAttendanceAvg = $totalSessions > 0
-                ? round((($totalPresent + ($totalExcused * 0.5)) / $totalSessions) * 100, 1)
-                : null;
-
-            $courseAttendanceAvg = $courseSessions['total'] > 0
-                ? round((($courseSessions['present'] + ($courseSessions['excused'] * 0.5)) / $courseSessions['total']) * 100, 1)
-                : null;
-
-            $mezmurAttendanceAvg = $mezmurSessions['total'] > 0
-                ? round((($mezmurSessions['present'] + ($mezmurSessions['excused'] * 0.5)) / $mezmurSessions['total']) * 100, 1)
-                : null;
-
-            $isEligible = $overallGradeAvg !== null
-                && $overallGradeAvg >= 50
-                && $overallAttendanceAvg !== null
-                && $overallAttendanceAvg >= 70;
-
-            if ($request->input('promotion_status') === 'eligible' && !$isEligible) {
+            if ($request->input('promotion_status') === 'eligible' && !$isEligible && !$includeIneligible) {
                 continue;
             }
 
@@ -306,36 +194,25 @@ class StudentPromotionController extends Controller
                 'name' => $student->name,
                 'christian_name' => $student->christian_name,
                 'status' => $student->status,
+                'is_flagged' => (bool) $student->is_flagged,
                 'section_id' => $student->section_id,
                 'section_name' => $currentSection?->name ?? 'Unassigned',
                 'program_name' => $currentSection?->programType?->name ?? 'None',
                 'grade_level' => $student->grade_level,
-                
+
                 // Dynamic Academic Evaluation
                 'overall_grade_avg' => $overallGradeAvg,
                 'courses_breakdown' => $coursesBreakdown,
                 'has_grades' => count($coursesBreakdown) > 0,
                 'is_eligible' => $isEligible,
-                'eligibility_reasons' => [
-                    'has_results' => $overallGradeAvg !== null,
-                    'grade_passed' => $overallGradeAvg !== null && $overallGradeAvg >= 50,
-                    'has_attendance' => $overallAttendanceAvg !== null,
-                    'attendance_passed' => $overallAttendanceAvg !== null && $overallAttendanceAvg >= 70,
-                ],
-                
+                'eligibility_reasons' => $eval['eligibility_reasons'],
+
                 // Dynamic Attendance Evaluation
                 'overall_attendance_avg' => $overallAttendanceAvg,
                 'course_attendance_avg' => $courseAttendanceAvg,
                 'mezmur_attendance_avg' => $mezmurAttendanceAvg,
-                'attendance_summary' => [
-                    'total' => $totalSessions,
-                    'present' => $totalPresent,
-                    'absent' => $totalAbsent,
-                    'excused' => $totalExcused,
-                    'course_total' => $courseSessions['total'],
-                    'mezmur_total' => $mezmurSessions['total'],
-                ],
-                'session_logs' => array_slice(array_reverse($sessionLogs), 0, 10),
+                'attendance_summary' => $attendanceSummary,
+                'session_logs' => $sessionLogs,
                 
                 // Promotion Workflow State
                 'promotion_status' => $promotionStatus,
@@ -354,18 +231,31 @@ class StudentPromotionController extends Controller
             ];
         }
 
-        // Summary counts across all students
-        $eligibleCount = $request->input('promotion_status') === 'eligible'
-            ? count($candidates)
-            : Student::where('promotion_status', 'eligible')->orWhereNull('promotion_status')->count();
+        // Summary counts across all students.
+        // eligible_count reflects REAL eligibility (grade + attendance thresholds),
+        // not just "students not yet in the pipeline".
+        $eligibleCount = \App\Services\PromotionEvaluator::countEligible();
 
         $stats = [
-            'total_students' => Student::count(),
+            'total_students' => Student::whereNotIn('status', ['Graduated', 'Inactive'])->count(),
+            'flagged_count' => Student::where('is_flagged', true)
+                ->whereNotIn('status', ['Graduated', 'Inactive'])->count(),
+            'pool_count' => Student::where(fn ($q) => $q->where('promotion_status', 'eligible')->orWhereNull('promotion_status'))
+                ->whereNotIn('status', ['Graduated', 'Inactive'])
+                ->where('is_flagged', false)
+                ->count(),
             'eligible_count' => $eligibleCount,
-            'nominated_count' => Student::whereIn('promotion_status', ['nominated_tmhrt', 'nominated'])->count(),
-            'endorsed_count' => Student::where('promotion_status', 'endorsed_yesew')->count(),
-            'promoted_count' => Student::where('promotion_status', 'promoted')->count(),
+            'ineligible_count' => 0, // computed below after pool_count
+            'nominated_count' => Student::whereIn('promotion_status', ['nominated_tmhrt', 'nominated'])
+                ->whereNotIn('status', ['Graduated', 'Inactive'])
+                ->where('is_flagged', false)->count(),
+            'endorsed_count' => Student::where('promotion_status', 'endorsed_yesew')
+                ->whereNotIn('status', ['Graduated', 'Inactive'])
+                ->where('is_flagged', false)->count(),
+            'promoted_count' => Student::where('promotion_status', 'promoted')
+                ->whereNotIn('status', ['Graduated', 'Inactive'])->count(),
         ];
+        $stats['ineligible_count'] = max(0, $stats['pool_count'] - $stats['eligible_count']);
 
         // All sections for dropdown selection
         $allSections = Section::with('programType')->orderBy('program_type_id')->orderBy('order_no')->get();
@@ -374,10 +264,14 @@ class StudentPromotionController extends Controller
             'candidates' => $candidates,
             'stats' => $stats,
             'sections' => $allSections,
+            'thresholds' => [
+                'min_grade' => (float) config('academic.promotion_min_grade', 50.0),
+                'min_attendance' => (float) config('academic.promotion_min_attendance', 60.0),
+            ],
             'user_role' => [
                 'is_super_admin' => $user->hasRole('super_admin'),
                 'is_tmhrt' => $user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'),
-                'is_yesew_habt' => $user->hasRole('super_admin') || $user->hasRole('yesew_habt'),
+                'is_yesew_habt' => $user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'),
             ],
         ];
 
@@ -411,33 +305,33 @@ class StudentPromotionController extends Controller
             'student_ids.*' => 'exists:students,id',
             'target_section_id' => 'nullable|exists:sections,id',
             'notes' => 'nullable|string|max:500',
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
+            'target_section_id' => 'target section',
+            'notes' => 'notes',
         ]);
 
-        $students = Student::with(['section', 'attendances', 'grades.assessment'])->whereIn('id', $request->student_ids)->get();
+        $students = Student::with(['section', 'attendances.assignment', 'grades.assessment.course'])->whereIn('id', $request->student_ids)->get();
         $targetSectionId = $request->target_section_id;
         $allSections = Section::orderBy('order_no')->get();
 
-        // Enforce the same live eligibility rule shown on the Tmhrt screen.
+        $thresholds = \App\Services\PromotionEvaluator::thresholds();
+        $minAttendance = $thresholds['min_attendance'];
+        $minGrade = $thresholds['min_grade'];
+
+        // Enforce the exact same live eligibility rule shown on the Tmhrt screen.
+        $sectionCourseMap = \App\Services\PromotionEvaluator::sectionCourseMap($students->pluck('section_id'));
         foreach ($students as $student) {
-            $totalAtt = $student->attendances->count();
-            $attendancePct = $totalAtt > 0
-                ? (($student->attendances->where('status', 'Present')->count() + ($student->attendances->where('status', 'Excused')->count() * 0.5)) / $totalAtt) * 100
-                : null;
-
-            $totalWeight = 0;
-            $weightedScore = 0;
-            foreach ($student->grades as $grade) {
-                $assessment = $grade->assessment;
-                if (!$assessment || (float) $assessment->max_score <= 0) continue;
-                $weight = (float) ($assessment->weight ?: 100);
-                $weightedScore += ((float) $grade->score / (float) $assessment->max_score) * $weight;
-                $totalWeight += $weight;
-            }
-            $gradePct = $totalWeight > 0 ? ($weightedScore / $totalWeight) * 100 : null;
-
-            if ($gradePct === null || $gradePct < 50 || $attendancePct === null || $attendancePct < 70) {
+            if ($student->is_flagged) {
                 return response()->json([
-                    'message' => "Student {$student->name} must have results of at least 50% and attendance of at least 70% before nomination."
+                    'message' => "Student {$student->name} is flagged/suspended and cannot be nominated for promotion."
+                ], 422);
+            }
+            $eval = \App\Services\PromotionEvaluator::evaluate($student, $sectionCourseMap);
+            if (!$eval['is_eligible']) {
+                return response()->json([
+                    'message' => "Student {$student->name} must have results of at least {$minGrade}% and attendance of at least {$minAttendance}% before nomination."
                 ], 422);
             }
         }
@@ -490,7 +384,7 @@ class StudentPromotionController extends Controller
     public function endorse(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin'))) {
             return response()->json([
                 'message' => 'Forbidden: Only Ye Sew Habt (የሰው ሀብት ክፍል) or Super Admin can endorse student promotions.'
             ], 403);
@@ -500,6 +394,10 @@ class StudentPromotionController extends Controller
             'student_ids' => 'required|array|min:1',
             'student_ids.*' => 'exists:students,id',
             'notes' => 'nullable|string|max:500',
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
+            'notes' => 'notes',
         ]);
 
         $students = Student::whereIn('id', $request->student_ids)
@@ -546,6 +444,10 @@ class StudentPromotionController extends Controller
             'student_ids' => 'required|array|min:1',
             'student_ids.*' => 'exists:students,id',
             'notes' => 'nullable|string|max:500',
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
+            'notes' => 'notes',
         ]);
 
         $students = Student::with(['section', 'targetSection.programType'])
@@ -598,7 +500,7 @@ class StudentPromotionController extends Controller
     public function reject(Request $request)
     {
         $user = Auth::user();
-        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('tmhrt_kfl'))) {
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('yesew_habt') || $user->hasRole('gngnunet_office_admin') || $user->hasRole('tmhrt_kfl'))) {
             return response()->json([
                 'message' => 'Forbidden: Your role cannot reject or return nominations.'
             ], 403);
@@ -608,6 +510,10 @@ class StudentPromotionController extends Controller
             'student_ids' => 'required|array|min:1',
             'student_ids.*' => 'exists:students,id',
             'reason' => 'required|string|max:500',
+        ], [], [
+            'student_ids' => 'students',
+            'student_ids.*' => 'student',
+            'reason' => 'reason',
         ]);
 
         $students = Student::whereIn('id', $request->student_ids)->get();
@@ -616,10 +522,16 @@ class StudentPromotionController extends Controller
             foreach ($students as $student) {
                 $student->promotion_status = 'eligible';
                 $student->target_section_id = null;
+                $student->nominated_by = null;
+                $student->nominated_at = null;
                 $student->endorsed_by = null;
                 $student->endorsed_at = null;
                 $student->endorsement_notes = null;
-                $student->promotion_notes = 'Reset by ' . $user->name . ': ' . $request->reason;
+                // Append (don't overwrite) so the reason history survives repeated returns.
+                $entry = '[' . now()->format('Y-m-d H:i') . '] Returned by ' . $user->name . ': ' . $request->reason;
+                $student->promotion_notes = $student->promotion_notes
+                    ? $student->promotion_notes . "\n" . $entry
+                    : $entry;
                 $student->save();
             }
         });
@@ -662,6 +574,9 @@ class StudentPromotionController extends Controller
         $request->validate([
             'student_ids'   => 'required|array',
             'student_ids.*' => 'exists:students,id',
+        ], [], [
+            'student_ids'   => 'students',
+            'student_ids.*' => 'student',
         ]);
 
         DB::transaction(function () use ($request) {
