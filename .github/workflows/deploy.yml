@@ -33,7 +33,10 @@ jobs:
           server: ${{ secrets.FTP_HOST }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ secrets.FTP_PATH }} # e.g. /home/cpaneluser/mgt-system/ — must end with '/'
+          protocol: ftps
+          port: 21
+          timeout: 120000
+          server-dir: ${{ secrets.FTP_PATH }} # must end with '/'
           exclude: |
             **/.git*
             **/.github/**
@@ -49,21 +52,20 @@ jobs:
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
 #
-# 1. Point the domain/subdomain docroot to   mgt-system/public
-#    (cPanel > Domains > document root), NOT the project root — .env must
-#    never be web-accessible.
+# 1. Point the subdomain docroot to   mgt-system/public
+#    (cPanel > Domains), NOT the project root — .env must never be
+#    web-accessible.
 #
-# 2. Create .env on the server once (cPanel > File Manager, or SSH):
-#       cp .env.production .env   — then fill in APP_URL, FRONTEND_URL,
-#       and the cPanel MySQL credentials.
+# 2. Create .env on the server once (cPanel > File Manager). .env.* files are
+#    excluded from upload, so paste in the contents of your local
+#    .env.production, then fill in APP_URL, FRONTEND_URL and the MySQL creds.
 #
-# 3. In cPanel > Terminal (or SSH), from the app directory run ONCE:
+# 3. In cPanel > Terminal, from the app directory run ONCE:
 #       php artisan migrate --force
 #       php artisan storage:link
 #       php artisan config:cache && php artisan route:cache
-#    Run `php artisan migrate --force` again after each deploy that adds
-#    migrations, and `php artisan config:cache` after any .env change.
+#    Re-run `php artisan migrate --force` after deploys that add migrations,
+#    and `php artisan config:cache` after any .env change.
 #
-# 4. Make sure storage/ and bootstrap/cache are writable (chmod -R 775
-#    via File Manager > Change Permissions if uploads fail).
+# 4. Make sure storage/ and bootstrap/cache are writable (chmod -R 775).
 # ────────────────────────────────────────────────────────────────────────────
