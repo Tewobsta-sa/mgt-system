@@ -33,7 +33,7 @@ jobs:
           server: ${{ secrets.FTP_HOST }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftp
+          protocol: ftps
           port: 21
           timeout: 120000
           server-dir: ${{ secrets.FTP_PATH }} # must end with '/'
@@ -48,6 +48,8 @@ jobs:
             storage/framework/cache/data/**
             storage/framework/sessions/**
             storage/framework/views/**
+            vendor/**
+            *.log
 
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
