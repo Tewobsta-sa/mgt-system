@@ -31,72 +31,72 @@ class ProgramTypesAndSectionsSeeder extends Seeder
 
         // 2. Sections for PreKG
         Section::firstOrCreate(
-            ['program_type_id' => $prekg->id, 'name' => 'PreKG-1'],
+            ['program_type_id' => $prekg->id, 'name' => 'ቅድመ-ሕፃናት 1'],
             ['order_no' => 1]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $prekg->id, 'name' => 'PreKG-2'],
+            ['program_type_id' => $prekg->id, 'name' => 'ቅድመ-ሕፃናት 2'],
             ['order_no' => 2]
         );
 
         // 3. Sections for Regular (Htsanat 1-4, Maekelawyan 5-8, Wetatoch 9-12)
         // Htsanat (Grades 1-4)
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Htsanat 1 (Grade 1)'],
+            ['program_type_id' => $regular->id, 'name' => 'አንደኛ ክፍል (ሕፃናት)'],
             ['order_no' => 1]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Htsanat 2 (Grade 2)'],
+            ['program_type_id' => $regular->id, 'name' => 'ሁለተኛ ክፍል (ሕፃናት)'],
             ['order_no' => 2]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Htsanat 3 (Grade 3)'],
+            ['program_type_id' => $regular->id, 'name' => 'ሦስተኛ ክፍል (ሕፃናት)'],
             ['order_no' => 3]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Htsanat 4 (Grade 4)'],
+            ['program_type_id' => $regular->id, 'name' => 'አራተኛ ክፍል (ሕፃናት)'],
             ['order_no' => 4]
         );
 
         // Maekelawyan (Grades 5-8)
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Maekelawyan 5 (Grade 5)'],
+            ['program_type_id' => $regular->id, 'name' => 'አምስተኛ ክፍል (ማዕከላውያን)'],
             ['order_no' => 5]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Maekelawyan 6 (Grade 6)'],
+            ['program_type_id' => $regular->id, 'name' => 'ስድስተኛ ክፍል (ማዕከላውያን)'],
             ['order_no' => 6]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Maekelawyan 7 (Grade 7)'],
+            ['program_type_id' => $regular->id, 'name' => 'ሰባተኛ ክፍል (ማዕከላውያን)'],
             ['order_no' => 7]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Maekelawyan 8 (Grade 8)'],
+            ['program_type_id' => $regular->id, 'name' => 'ስምንተኛ ክፍል (ማዕከላውያን)'],
             ['order_no' => 8]
         );
 
         // Wetatoch (Grades 9-12)
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Wetatoch 9 (Grade 9)'],
+            ['program_type_id' => $regular->id, 'name' => 'ዘጠነኛ ክፍል (ወጣቶች)'],
             ['order_no' => 9]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Wetatoch 10 (Grade 10)'],
+            ['program_type_id' => $regular->id, 'name' => 'አሥረኛ ክፍል (ወጣቶች)'],
             ['order_no' => 10]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Wetatoch 11 (Grade 11)'],
+            ['program_type_id' => $regular->id, 'name' => 'አሥራ አንደኛ ክፍል (ወጣቶች)'],
             ['order_no' => 11]
         );
         Section::firstOrCreate(
-            ['program_type_id' => $regular->id, 'name' => 'Wetatoch 12 (Grade 12)'],
+            ['program_type_id' => $regular->id, 'name' => 'አሥራ ሁለተኛ ክፍል (ወጣቶች)'],
             ['order_no' => 12]
         );
 
         // 4. Section for Distance
         Section::firstOrCreate(
-            ['program_type_id' => $distance->id, 'name' => 'Distance Section 1'],
+            ['program_type_id' => $distance->id, 'name' => 'የርቀት 1'],
             ['order_no' => 1]
         );
     }

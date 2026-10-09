@@ -82,7 +82,7 @@ class StudentImportController extends Controller
         '1234',
         'maekelawyan',
         '1',
-        'Maekelawyan 5 (Grade 5)',
+        'አምስተኛ ክፍል (ማዕከላውያን)',
         'new',
         'day',
     ];
