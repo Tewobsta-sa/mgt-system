@@ -1,25 +1,24 @@
 <?php 
 return [
     'super_admin' => ['*'],
-    'mezmur_office_admin' => [
-        'mezmur_trainer',
-        'wereb_trainer',
-        'mezmur_office_coordinator'
+    'yesew_habt' => [
+        'student_registration',
+        'attendance_taking',
+        'ministry_assignment',
     ],
-    'tmhrt_office_admin' => [
-        'regular_teacher',
-        'tmhrt_office_coordinator'
+    'mereja_kfl' => [
+        'view_only',
     ],
-    'distance_admin' => [
-        'distance_teacher',
-        'distance_coordinator'
+    'mezmur_kfl' => [
+        'view_students',
+        'mezmur_schedules',
+        'mezmur_exams',
+        'send_passed_to_yesew_habt',
     ],
-    'gngnunet_office_admin' => [
-        'gngnunet_office_coordinator',
-        'student'
+    'tmhrt_kfl' => [
+        'tmhrt_schedules',
+        'courses_manage',
+        'grades_manage',
+        'teachers_manage',
     ],
-    // Generic instructor role used across program types. Controllers check
-    // hasRole('teacher') directly (see AssignmentController, GradeController,
-    // RegisteredUserController), so this role must exist after a fresh install.
-    'teacher' => [],
 ];

@@ -10,6 +10,8 @@ use App\Services\AdminManagementService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use App\Models\RefreshToken;
+use Spatie\Permission\Models\Role;
 
 class RegisteredUserController extends Controller
 {
@@ -20,77 +22,79 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request)
     {
-        // Check if system needs initialization
-        if (SystemInitializationService::needsInitialization()) {
-            return response()->json([
-                'error' => 'System needs initialization. Please use /api/system/initialize endpoint to create the first admin user.'
-            ], 400);
-        }
-        
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'username' => 'required|string|unique:users',
-            'password' => 'required|string|min:8|confirmed',
-            'role' => 'required|string',
-            'security_question' => 'required|string|max:255',
-            'security_answer' => 'required|string|max:255',
-            'program_type_ids' => 'array',
-            'program_type_ids.*' => 'exists:program_types,id',
-        ]);
-
-        $currentRole = $request->user()->getRoleNames()->first();
-        $targetRole = $request->role;
-
-
-        $allowedRoles = $this->allowedToRegister($currentRole);
-
-        if (!in_array($targetRole, $allowedRoles)) {
-            return response()->json(['error' => 'You are not allowed to register this role'], 403);
-        }
-
-        // If role is teacher, check program type restrictions
-        if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
-            $allowedProgramTypeIds = $this->allowedProgramTypeIdsForAdmin($currentRole);
-
-            foreach ($request->program_type_ids as $ptId) {
-                if (!in_array($ptId, $allowedProgramTypeIds)) {
-                    return response()->json(['error' => 'You cannot assign this program type'], 403);
-                }
+        try {
+            // Check if system needs initialization
+            if (SystemInitializationService::needsInitialization()) {
+                return response()->json([
+                    'error' => 'System needs initialization. Please use /api/system/initialize endpoint to create the first admin user.'
+                ], 400);
             }
+            
+            $request->validate([
+                'name' => 'required|string|max:255',
+                'username' => 'required|string|unique:users',
+                'password' => 'required|string|min:8|confirmed',
+                'role' => 'required|string|in:super_admin,yesew_habt,tmhrt_kfl,mezmur_kfl,mereja_kfl,teacher',
+                'security_question' => 'required|string|max:255',
+                'security_answer' => 'required|string|max:255',
+                'program_type_ids' => 'nullable|array',
+                'program_type_ids.*' => 'exists:program_types,id',
+            ]);
+
+            $user = $request->user();
+            if (!$user) {
+                return response()->json(['error' => 'Unauthenticated user'], 401);
+            }
+
+            $targetRole = $request->role;
+
+            // Super admin can register any allowed role; tmhrt_kfl can register teachers only.
+            $canRegister = $user->hasRole('super_admin') ||
+                ($user->hasRole('tmhrt_kfl') && $targetRole === 'teacher');
+
+            if (!$canRegister) {
+                return response()->json(['error' => 'ተጠቃሚዎችን መመዝገብ የሚችለው የበላይ አስተዳዳሪ (Super Admin) ወይም ትምህርት ክፍል (Tmhrt Kfl) ለመምህራን ብቻ ነው።'], 403);
+            }
+
+            // Ensure the target role exists before assigning it
+            Role::firstOrCreate(['name' => $targetRole, 'guard_name' => 'web']);
+
+            $newUser = User::create([
+                'name' => $request->name,
+                'username' => $request->username,
+                'password' => Hash::make($request->password),
+                'security_question' => $request->security_question,
+                'security_answer' => Hash::make($request->security_answer),
+            ]);
+            $newUser->assignRole($targetRole);
+
+            if ($request->filled('program_type_ids')) {
+                $newUser->programTypes()->sync($request->program_type_ids);
+            }
+
+            return response()->json(['message' => 'User registered successfully'], 201);
+        } catch (\Exception $e) {
+            \Log::error('Registration Error: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Server Error',
+                'message' => $e->getMessage()
+            ], 500);
         }
-
-        $user = User::create([
-            'name' => $request->name,
-            'username' => $request->username,
-            'password' => Hash::make($request->password),
-            'security_question' => $request->security_question,
-            'security_answer' => Hash::make($request->security_answer),
-        ]);
-        $user->assignRole($targetRole);
-
-        // Assign program types if teacher
-        if ($targetRole === 'teacher' && $request->filled('program_type_ids')) {
-            $user->programTypes()->sync($request->program_type_ids);
-        }
-
-        return response()->json(['message' => 'User registered successfully'], 201);
     }
+
 
     private function allowedToRegister($role)
     {
         return match ($role) {
-            'mezmur_office_admin' => ['mezmur_office_coordinator'],
-            'tmhrt_office_admin' => ['teacher', 'tmhrt_office_coordinator'],
-            'young_tmhrt_admin' => ['teacher'],  // assuming young admin role added
-            'distance_admin' => ['teacher', 'distance_coordinator'],
-            'gngnunet_office_admin' => ['gngnunet_office_coordinator'],
             'super_admin' => [
-                'mezmur_office_coordinator',
-                'teacher', 'tmhrt_office_coordinator',
-                'distance_coordinator', 'gngnunet_office_coordinator', 'student',
-                'mezmur_office_admin', 'tmhrt_office_admin', 'distance_admin',
-                'gngnunet_office_admin', 'super_admin', 'young_tmhrt_admin','young_gngnunet_admin'
+                'super_admin',
+                'yesew_habt',
+                'tmhrt_kfl',
+                'mezmur_kfl',
+                'mereja_kfl',
+                'teacher',
             ],
+            'tmhrt_kfl' => ['teacher'],
             default => []
         };
     }
@@ -109,7 +113,10 @@ class RegisteredUserController extends Controller
             \Log::info('All Program Types:', $allProgramTypes);
 
             return match ($adminRole) {
-                'tmhrt_office_admin' => isset($allProgramTypes['regular']) ? [$allProgramTypes['regular']] : [],
+                'tmhrt_office_admin' => [
+                    $allProgramTypes['regular'] ?? null,
+                    $allProgramTypes['young'] ?? null
+                ],
                 'young_tmhrt_admin' => isset($allProgramTypes['young']) ? [$allProgramTypes['young']] : [],
                 'distance_admin' => isset($allProgramTypes['distance']) ? [$allProgramTypes['distance']] : [],
                 'super_admin' => array_values($allProgramTypes),
@@ -122,21 +129,62 @@ class RegisteredUserController extends Controller
     public function forgotPassword(Request $request)
     {
         $request->validate([
-            'username' => 'required|string|exists:users,username',
+            'username' => 'required|string',
             'security_answer' => 'required|string',
             'new_password' => 'required|string|min:8|confirmed',
         ]);
 
+        // Lockout after 5 failed answers per username for 30 minutes.
+        $attemptKey = 'forgot_pw_attempts:' . strtolower((string) $request->username);
+        if ((int) \Illuminate\Support\Facades\Cache::get($attemptKey, 0) >= 5) {
+            return response()->json([
+                'error' => 'Too many failed attempts. Please try again in 30 minutes.',
+            ], 429);
+        }
+
         $user = User::where('username', $request->username)->first();
 
-        if (!Hash::check($request->security_answer, $user->security_answer)) {
+        // Uniform failure: same response for unknown user or wrong answer.
+        if (!$user || !Hash::check($request->security_answer, (string) $user?->security_answer)) {
+            \Illuminate\Support\Facades\Cache::put(
+                $attemptKey,
+                (int) \Illuminate\Support\Facades\Cache::get($attemptKey, 0) + 1,
+                now()->addMinutes(30)
+            );
             return response()->json(['error' => 'Incorrect security answer'], 403);
         }
 
+        \Illuminate\Support\Facades\Cache::forget($attemptKey);
+
+        // Store the same hash format used by the login verifier.
         $user->password = Hash::make($request->new_password);
         $user->save();
 
+        $user->refresh();
+        if (!Hash::check($request->new_password, $user->password)) {
+            return response()->json(['error' => 'Password reset could not be verified'], 500);
+        }
+
+        // Force all existing sessions to authenticate with the new password.
+        $user->tokens()->delete();
+        RefreshToken::revokeAllForUser($user);
+
         return response()->json(['message' => 'Password reset successful'], 200);
+    }
+
+    public function securityQuestion(Request $request)
+    {
+        $request->validate([
+            'username' => 'required|string',
+        ]);
+
+        $user = User::where('username', $request->username)->first();
+
+        // Uniform response for unknown usernames so this endpoint cannot be
+        // used to enumerate accounts; the follow-up answer check will fail anyway.
+        return response()->json([
+            'security_question' => $user?->security_question ?? 'Registered security question',
+        ]);
     }
 
     public function update(Request $request)
@@ -188,11 +236,16 @@ class RegisteredUserController extends Controller
 
     public function adminUpdate(Request $request, $id)
     {
-        if (!Auth::check() || !Auth::user()->hasRole('super_admin')) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
+        $currentUser = Auth::user();
         $user = User::findOrFail($id);
+        $targetRole = $user->getRoleNames()->first();
+
+        // Check if management is allowed based on role hierarchy
+        $allowedToManage = $this->allowedToRegister($currentUser->getRoleNames()->first());
+        
+        if (!in_array($targetRole, $allowedToManage) && !$currentUser->hasRole('super_admin')) {
+            return response()->json(['error' => 'You are not allowed to update this role'], 403);
+        }
 
         $request->validate([
             'name' => 'sometimes|string|max:255',
@@ -225,21 +278,18 @@ class RegisteredUserController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        if (!Auth::check() || !Auth::user()->hasRole('super_admin')) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $currentUser = Auth::user();
+        $userToDelete = User::findOrFail($id);
+        $targetRole = $userToDelete->getRoleNames()->first();
+
+        // Check if deletion is allowed based on role hierarchy
+        $allowedToManage = $this->allowedToRegister($currentUser->getRoleNames()->first());
         
-        // Use the service to check if deletion is allowed
-        $canDelete = AdminManagementService::canDeleteUser($currentUser, $id);
-        
-        if (!$canDelete['can_delete']) {
-            return response()->json([
-                'error' => $canDelete['reason'],
-                'message' => $canDelete['message']
-            ], 400);
+        if (!in_array($targetRole, $allowedToManage) && !$currentUser->hasRole('super_admin')) {
+            return response()->json(['error' => 'You are not allowed to delete this role'], 403);
         }
+        
+        // Use the service to check if deletion is allowed (extra business logic if any)
         
         $user = User::findOrFail($id);
         $user->delete();
@@ -247,16 +297,31 @@ class RegisteredUserController extends Controller
         return response()->json(['message' => 'User deleted successfully'], 200);
     }
 
+    public function show($id)
+    {
+        $user = User::with(['roles', 'programTypes'])->findOrFail($id);
+        return response()->json($user);
+    }
+
     public function index(Request $request)
     {
-        $query = User::with('roles');
+        $query = User::with(['roles', 'programTypes']);
 
-        if ($search = $request->input('search')) {
-            $query->where('name', 'like', "%{$search}%")
-                ->orWhere('username', 'like', "%{$search}%");
+        if ($request->filled('role')) {
+            $query->whereHas('roles', function($q) use ($request) {
+                $q->where('name', $request->role);
+            });
         }
 
-        return response()->json($query->paginate(10));
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('username', 'like', "%{$search}%");
+            });
+        }
+
+        return $query->latest()->paginate($request->query('per_page', 10));
     }
 
     /**

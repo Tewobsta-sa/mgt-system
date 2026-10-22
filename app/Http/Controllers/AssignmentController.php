@@ -18,24 +18,47 @@ class AssignmentController extends Controller
 {
     protected function hasScheduleConflict($type, $dayOfWeek, $startTime, $endTime, $userOrTrainerId, $excludeAssignmentId = null, $scheduledDate = null)
     {
-        $query = Assignment::where('type', $type)
-                    ->where('start_time', '<', $endTime)
-                    ->where('end_time', '>', $startTime);
+        $query = Assignment::where('type', $type);
 
-        if ($scheduledDate) {
-            $query->where('scheduled_date', $scheduledDate);
-        } else {
+        // If both values are present, treat it as recurring and match by weekday.
+        if (!is_null($dayOfWeek) && $dayOfWeek !== '') {
             $query->where('day_of_week', $dayOfWeek);
+        } elseif (!is_null($scheduledDate) && $scheduledDate !== '') {
+            $query->where('scheduled_date', $scheduledDate);
         }
 
-        if ($type === 'Course') {
+        if ($type === 'Course' && $userOrTrainerId !== null) {
             $query->where('user_id', $userOrTrainerId);
-        } elseif ($type === 'MezmurTraining') {
+        } elseif ($type === 'MezmurTraining' && $userOrTrainerId !== null) {
             $query->where('trainer_id', $userOrTrainerId);
         }
 
         if ($excludeAssignmentId) {
             $query->where('id', '!=', $excludeAssignmentId);
+        }
+
+        if ($startTime < $endTime) {
+            $query->where(function ($q) use ($startTime, $endTime) {
+                $q->where(function ($sameDay) use ($startTime, $endTime) {
+                    $sameDay->whereColumn('start_time', '<', 'end_time')
+                            ->where('start_time', '<', $endTime)
+                            ->where('end_time', '>', $startTime);
+                })->orWhere(function ($overnight) use ($startTime, $endTime) {
+                    $overnight->whereColumn('start_time', '>=', 'end_time')
+                              ->where(function ($sub) use ($startTime, $endTime) {
+                                  $sub->where('start_time', '<', $endTime)
+                                      ->orWhere('end_time', '>', $startTime);
+                              });
+                });
+            });
+        } else {
+            // Overnight session (e.g. 22:00 to 02:00)
+            $query->where(function ($q) use ($startTime, $endTime) {
+                $q->where('start_time', '>=', $startTime)
+                  ->orWhere('end_time', '<=', $endTime)
+                  ->orWhere('start_time', '<', $endTime)
+                  ->orWhere('end_time', '>', $startTime);
+            });
         }
 
         return $query->exists();
@@ -58,28 +81,34 @@ class AssignmentController extends Controller
             'assignmentCourses.teacher'
         ]);
 
-        if ($user->hasRole('tmhrt_office_admin')) {
+        if ($user->hasRole('super_admin') || $user->hasRole('mereja_kfl') || $user->hasRole('yesew_habt')) {
+            // Can see everything
+        } elseif ($user->hasRole('tmhrt_kfl')) {
             $query->where('type', 'Course');
-        } elseif ($user->hasRole('mezmur_office_admin')) {
+        } elseif ($user->hasRole('mezmur_kfl')) {
             $query->where('type', 'MezmurTraining');
         } elseif ($user->hasRole('teacher')) {
-            // Teachers see only course assignments they are attached to
-            $query->where('type', 'Course')
-                ->where(function ($q) use ($user) {
-                    $q->where('user_id', $user->id)
-                      ->orWhereHas('assignmentCourses', fn ($qq) => $qq->where('teacher_id', $user->id));
-                });
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereHas('assignmentCourses', fn ($ac) =>
+                      $ac->where('teacher_id', $user->id)
+                  );
+            });
         } else {
             return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN));
         }
 
         if ($search = $request->input('q')) {
             $query->where(function ($qwhere) use ($search) {
                 $qwhere->where('id', $search)
                     ->orWhere('location', 'like', "%{$search}%")
-                    ->orWhereHas('trainer', fn($t) => $t->where('name', 'like', "%{$search}%"))
+                    ->orWhere('trainer_name', 'like', "%{$search}%")
                     ->orWhereHas('teacher', fn($u) => $u->where('name', 'like', "%{$search}%"))
-                    ->orWhereHas('assignmentCourses.course', fn($c) => $c->where('title', 'like', "%{$search}%"))
+                    ->orWhereHas('assignmentCourses.course', fn($c) => $c->where('name', 'like', "%{$search}%"))
                     ->orWhereHas('mezmurs', fn($m) => $m->where('title', 'like', "%{$search}%"));
             });
         }
@@ -104,16 +133,19 @@ class AssignmentController extends Controller
         }
 
         if ($assignment->type === 'Course') {
-            $isOfficeAdmin = $user->hasRole('tmhrt_office_admin');
-            $isAssignedTeacher = $user->hasRole('teacher') && (
-                $assignment->user_id === $user->id ||
-                $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists()
-            );
-            if (! $isOfficeAdmin && ! $isAssignedTeacher) {
+            $canView = $user->hasRole('tmhrt_kfl')
+                || $user->hasRole('super_admin')
+                || $user->hasRole('mereja_kfl')
+                || $user->hasRole('yesew_habt')
+                || ($user->hasRole('teacher') && (
+                    $assignment->user_id === $user->id
+                    || $assignment->assignmentCourses()->where('teacher_id', $user->id)->exists()
+                ));
+            if (! $canView) {
                 return response()->json(['message' => 'Forbidden'], 403);
             }
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !($user->hasRole('mezmur_kfl') || $user->hasRole('super_admin') || $user->hasRole('mereja_kfl') || $user->hasRole('yesew_habt'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -141,43 +173,80 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Either day_of_week or scheduled_date is required'], 422);
         }
 
-        if ($user->hasRole('tmhrt_office_admin')) {
+        if ($user->hasRole('mezmur_kfl') && !$user->hasRole('super_admin')) {
+            goto mezmur_branch;
+        }
+
+        if ($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl')) {
+            if ($request->type === 'MezmurTraining' && $user->hasRole('super_admin')) {
+                goto mezmur_branch;
+            }
+
             $rules = [
-                'section' => 'required|string',
+                'section_id' => 'nullable|exists:sections,id',
+                'section' => 'required_without:section_id|string',
                 'user_id' => 'required|exists:users,id',
-                'course' => 'required|string',
+                'course_id' => 'nullable|exists:courses,id',
+                'course' => 'required_without:course_id|string',
                 'default_period_order' => 'nullable|integer',
                 'location' => 'nullable|string',
                 'day_of_week' => 'nullable|integer|min:0|max:6',
                 'scheduled_date' => 'nullable|date',
+                'is_night' => 'nullable|boolean',
                 'start_time' => 'required|date_format:H:i',
-                'end_time' => 'required|date_format:H:i|after:start_time',
+                'end_time' => 'required|date_format:H:i|different:start_time',
             ];
-            $validated = $request->validate($rules);
+            $validated = $request->validate($rules, [], [
+                'section_id' => 'section',
+                'section' => 'section',
+                'user_id' => 'teacher',
+                'course_id' => 'course',
+                'course' => 'course',
+                'start_time' => 'start time',
+                'end_time' => 'end time',
+                'scheduled_date' => 'date',
+                'day_of_week' => 'day of week',
+            ]);
+            if (!filter_var($validated['is_night'] ?? false, FILTER_VALIDATE_BOOLEAN) && $validated['end_time'] <= $validated['start_time']) {
+                return response()->json(['message' => 'Day schedule end time must be after start time'], 422);
+            }
+            $isRecurring = !is_null($validated['day_of_week'] ?? null) && ($validated['day_of_week'] ?? '') !== '';
 
-            $assignedUser = User::find($validated['user_id']);
-            if (!$assignedUser || !$assignedUser->hasRole('teacher')) {
-                return response()->json(['message' => 'Assigned user must have the teacher role'], 422);
+            // Normalize mutually exclusive fields so conflict detection is deterministic.
+            if ($isRecurring) {
+                $validated['scheduled_date'] = null;
+            } else {
+                $validated['day_of_week'] = null;
             }
 
-            $section = Section::where('name', $validated['section'])->first();
+            $assignedUser = User::find($validated['user_id']);
+            if (!$assignedUser || !($assignedUser->hasRole('tmhrt_kfl') || $assignedUser->hasRole('super_admin') || $assignedUser->hasRole('teacher'))) {
+                return response()->json(['message' => 'Assigned user must belong to Tmhrt Kfl'], 422);
+            }
+
+            if ($validated['section_id'] ?? null) {
+                $section = Section::find($validated['section_id']);
+            } else {
+                $section = Section::where('name', $validated['section'])->first();
+            }
+
             if (!$section) {
                 return response()->json(['message' => 'Section not found'], 422);
             }
-            $course = Course::where('name', $validated['course'])->first();
+
+            if ($validated['course_id'] ?? null) {
+                $course = Course::find($validated['course_id']);
+            } else {
+                $course = Course::where('name', $validated['course'])->first();
+            }
+
             if (!$course) {
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
-            // Check that section and course program types match
-            if ($section->program_type_id !== $course->program_type_id) {
+            // Check that section and course program types match if both specified
+            if ($section->program_type_id && $course->program_type_id && $section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
-            }
-
-            // Check that teacher's program types include the course/section program type
-            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('id')->toArray();
-            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
-                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(
@@ -196,6 +265,7 @@ class AssignmentController extends Controller
             try {
                 $assignment = Assignment::create([
                     'type' => 'Course',
+                    'is_night' => filter_var($validated['is_night'] ?? false, FILTER_VALIDATE_BOOLEAN),
                     'section_id' => $section->id,
                     'user_id' => $validated['user_id'],
                     'location' => $validated['location'] ?? null,
@@ -230,51 +300,64 @@ class AssignmentController extends Controller
                 return response()->json(['message' => 'Could not create assignment', 'error' => $e->getMessage()], 500);
             }
         } 
-        elseif ($user->hasRole('mezmur_office_admin')) {
+        mezmur_branch:
+        if ($user->hasRole('super_admin') || $user->hasRole('mezmur_kfl')) {
             $rules = [
-                'trainer_id' => 'required|exists:trainers,id',
-                'mezmur_ids' => 'required|array|min:1',
+                'trainer_name' => 'nullable|string|max:255',
+                'mezmur_ids' => 'nullable|array',
                 'mezmur_ids.*' => 'exists:mezmurs,id',
+                'section_id' => 'nullable|exists:sections,id',
                 'location' => 'nullable|string',
                 'day_of_week' => 'nullable|integer|min:0|max:6',
                 'scheduled_date' => 'nullable|date',
+                'is_night' => 'nullable|boolean',
                 'start_time' => 'required|date_format:H:i',
-                'end_time' => 'required|date_format:H:i|after:start_time',
+                'end_time' => 'required|date_format:H:i|different:start_time',
             ];
-            $validated = $request->validate($rules);
+            $validated = $request->validate($rules, [], [
+                'trainer_name' => 'trainer name',
+                'mezmur_ids' => 'mezmur songs',
+                'mezmur_ids.*' => 'mezmur song',
+                'section_id' => 'section',
+                'day_of_week' => 'day of week',
+                'scheduled_date' => 'scheduled date',
+                'is_night' => 'night shift',
+                'start_time' => 'start time',
+                'end_time' => 'end time',
+            ]);
+            if (!filter_var($validated['is_night'] ?? false, FILTER_VALIDATE_BOOLEAN) && $validated['end_time'] <= $validated['start_time']) {
+                return response()->json(['message' => 'Day schedule end time must be after start time'], 422);
+            }
+            $isRecurring = !is_null($validated['day_of_week'] ?? null) && ($validated['day_of_week'] ?? '') !== '';
 
-            $trainer = Trainer::find($validated['trainer_id']);
-            if (!$trainer) {
-                return response()->json(['message' => 'Trainer not found'], 422);
+            if ($isRecurring) {
+                $validated['scheduled_date'] = null;
+            } else {
+                $validated['day_of_week'] = null;
             }
 
-            $mezmurs = Mezmur::whereIn('id', $validated['mezmur_ids'])->get();
-
-            foreach ($mezmurs as $mezmur) {
-                if (!in_array($mezmur->category_type, $trainer->specialties ?? [])) {
-                    return response()->json([
-                        'message' => "Trainer specialty mismatch: Trainer does not have the required specialty '{$mezmur->category_type}' for mezmur '{$mezmur->title}'."
-                    ], 422);
-                }
-            }
+            $mezmurs = Mezmur::whereIn('id', $validated['mezmur_ids'] ?? [])->get();
 
             if ($this->hasScheduleConflict(
                 'MezmurTraining', 
                 $validated['day_of_week'] ?? null, 
                 $validated['start_time'], 
                 $validated['end_time'], 
-                $validated['trainer_id'], 
+                null, 
                 null, 
                 $validated['scheduled_date'] ?? null
             )) {
-                return response()->json(['message' => 'Schedule conflict: Trainer has another assignment at this time'], 422);
+                return response()->json(['message' => 'Schedule conflict: Another mezmur training is scheduled at this time'], 422);
             }
 
             DB::beginTransaction();
             try {
                 $assignment = Assignment::create([
                     'type' => 'MezmurTraining',
-                    'trainer_id' => $validated['trainer_id'],
+                    'is_night' => filter_var($validated['is_night'] ?? false, FILTER_VALIDATE_BOOLEAN),
+                    'trainer_id' => null,
+                    'trainer_name' => $validated['trainer_name'] ?? null,
+                    'section_id' => $validated['section_id'] ?? null,
                     'location' => $validated['location'] ?? null,
                     'day_of_week' => $validated['day_of_week'] ?? null,
                     'scheduled_date' => $validated['scheduled_date'] ?? null,
@@ -283,7 +366,7 @@ class AssignmentController extends Controller
                     'active' => true,
                 ]);
 
-                foreach ($validated['mezmur_ids'] as $mid) {
+                foreach ($validated['mezmur_ids'] ?? [] as $mid) {
                     AssignmentMezmur::create([
                         'assignment_id' => $assignment->id,
                         'mezmur_id' => $mid,
@@ -308,7 +391,11 @@ class AssignmentController extends Controller
             }
         } 
         else {
-            return response()->json(['message' => 'Your role cannot create assignments'], 403);
+            if (!$user->hasRole('super_admin')) {
+                return response()->json(['message' => 'Your role cannot create assignments'], 403);
+            }
+            // If super_admin reached here without specifically hitting a branch
+            return response()->json(['message' => 'Invalid assignment type specified'], 400);
         }
     }
 
@@ -320,10 +407,10 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if ($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) {
+        if ($assignment->type === 'Course' && !($user->hasRole('tmhrt_kfl') || $user->hasRole('super_admin'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin')) {
+        if ($assignment->type === 'MezmurTraining' && !($user->hasRole('mezmur_kfl') || $user->hasRole('super_admin'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -333,43 +420,72 @@ class AssignmentController extends Controller
 
         if ($assignment->type === 'Course') {
             $rules = [
-                'section' => 'sometimes|required|string',
+                'section_id' => 'nullable|exists:sections,id',
+                'section' => 'sometimes|required_without:section_id|string',
                 'user_id' => 'required|exists:users,id',
-                'course' => 'required|string',
+                'course_id' => 'nullable|exists:courses,id',
+                'course' => 'required_without:course_id|string',
                 'default_period_order' => 'nullable|integer',
                 'location' => 'nullable|string',
                 'day_of_week' => 'nullable|integer|min:0|max:6',
                 'scheduled_date' => 'nullable|date',
+                'is_night' => 'nullable|boolean',
                 'start_time' => 'required|date_format:H:i',
-                'end_time' => 'required|date_format:H:i|after:start_time',
+                'end_time' => 'required|date_format:H:i|different:start_time',
                 'active' => 'nullable|boolean',
             ];
 
-            $data = $request->validate($rules);
+            $data = $request->validate($rules, [], [
+                'section_id' => 'section',
+                'section' => 'section',
+                'user_id' => 'teacher',
+                'course_id' => 'course',
+                'course' => 'course',
+                'start_time' => 'start time',
+                'end_time' => 'end time',
+                'scheduled_date' => 'date',
+                'day_of_week' => 'day of week',
+            ]);
+            $checkIsNight = isset($data['is_night']) ? filter_var($data['is_night'], FILTER_VALIDATE_BOOLEAN) : (bool) $assignment->is_night;
+            if (!$checkIsNight && $data['end_time'] <= $data['start_time']) {
+                return response()->json(['message' => 'Day schedule end time must be after start time'], 422);
+            }
+            $isRecurring = !is_null($data['day_of_week'] ?? null) && ($data['day_of_week'] ?? '') !== '';
 
-            $assignedUser = User::find($data['user_id']);
-            if (!$assignedUser || !$assignedUser->hasRole('teacher')) {
-                return response()->json(['message' => 'Assigned user must have the teacher role'], 422);
+            if ($isRecurring) {
+                $data['scheduled_date'] = null;
+            } else {
+                $data['day_of_week'] = null;
             }
 
-            $section = Section::where('name', $data['section'])->first();
+            $assignedUser = User::find($data['user_id']);
+            if (!$assignedUser || !($assignedUser->hasRole('tmhrt_kfl') || $assignedUser->hasRole('super_admin') || $assignedUser->hasRole('teacher'))) {
+                return response()->json(['message' => 'Assigned user must belong to Tmhrt Kfl'], 422);
+            }
+
+            if ($data['section_id'] ?? null) {
+                $section = Section::find($data['section_id']);
+            } else {
+                $section = Section::where('name', $data['section'])->first();
+            }
+
             if (!$section) {
                 return response()->json(['message' => 'Section not found'], 422);
             }
-            $course = Course::where('name', $data['course'])->first();
+
+            if ($data['course_id'] ?? null) {
+                $course = Course::find($data['course_id']);
+            } else {
+                $course = Course::where('name', $data['course'])->first();
+            }
+
             if (!$course) {
                 return response()->json(['message' => 'Course not found'], 422);
             }
 
-            // Check that section and course program types match
-            if ($section->program_type_id !== $course->program_type_id) {
+            // Check that section and course program types match if both specified
+            if ($section->program_type_id && $course->program_type_id && $section->program_type_id !== $course->program_type_id) {
                 return response()->json(['message' => 'Section and Course program types do not match'], 422);
-            }
-
-            // Check that teacher's program types include the course/section program type
-            $teacherProgramTypeIds = $assignedUser->programTypes()->pluck('id')->toArray();
-            if (!in_array($section->program_type_id, $teacherProgramTypeIds)) {
-                return response()->json(['message' => 'Teacher program type does not match Section and Course program type'], 422);
             }
 
             if ($this->hasScheduleConflict(
@@ -387,6 +503,7 @@ class AssignmentController extends Controller
             DB::transaction(function () use ($assignment, $data, $section, $course) {
                 $assignment->update([
                     'section_id' => $section->id,
+                    'is_night' => isset($data['is_night']) ? filter_var($data['is_night'], FILTER_VALIDATE_BOOLEAN) : $assignment->is_night,
                     'user_id' => $data['user_id'],
                     'location' => $data['location'] ?? $assignment->location,
                     'day_of_week' => $data['day_of_week'] ?? null,
@@ -415,49 +532,50 @@ class AssignmentController extends Controller
 
         } else {
             $rules = [
-                'trainer_id' => 'required|exists:trainers,id',
+                'trainer_name' => 'nullable|string|max:255',
                 'mezmur_ids' => 'required|array|min:1',
                 'mezmur_ids.*' => 'exists:mezmurs,id',
                 'location' => 'nullable|string',
                 'day_of_week' => 'nullable|integer|min:0|max:6',
                 'scheduled_date' => 'nullable|date',
+                'is_night' => 'nullable|boolean',
                 'start_time' => 'required|date_format:H:i',
-                'end_time' => 'required|date_format:H:i|after:start_time',
+                'end_time' => 'required|date_format:H:i|different:start_time',
                 'active' => 'nullable|boolean',
             ];
 
             $data = $request->validate($rules);
+            $checkIsNight = isset($data['is_night']) ? filter_var($data['is_night'], FILTER_VALIDATE_BOOLEAN) : (bool) $assignment->is_night;
+            if (!$checkIsNight && $data['end_time'] <= $data['start_time']) {
+                return response()->json(['message' => 'Day schedule end time must be after start time'], 422);
+            }
+            $isRecurring = !is_null($data['day_of_week'] ?? null) && ($data['day_of_week'] ?? '') !== '';
 
-            $trainer = Trainer::find($data['trainer_id']);
-            if (!$trainer) {
-                return response()->json(['message' => 'Trainer not found'], 422);
+            if ($isRecurring) {
+                $data['scheduled_date'] = null;
+            } else {
+                $data['day_of_week'] = null;
             }
 
             $mezmurs = Mezmur::whereIn('id', $data['mezmur_ids'])->get();
-
-            foreach ($mezmurs as $mezmur) {
-                if (!in_array($mezmur->category_type, $trainer->specialties ?? [])) {
-                    return response()->json([
-                        'message' => "Trainer specialty mismatch: Trainer does not have the required specialty '{$mezmur->category_type}' for mezmur '{$mezmur->title}'."
-                    ], 422);
-                }
-            }
 
             if ($this->hasScheduleConflict(
                 'MezmurTraining', 
                 $data['day_of_week'] ?? null, 
                 $data['start_time'], 
                 $data['end_time'], 
-                $data['trainer_id'], 
+                null, 
                 $assignment->id, 
                 $data['scheduled_date'] ?? null
             )) {
-                return response()->json(['message' => 'Schedule conflict: Trainer has another assignment at this time'], 422);
+                return response()->json(['message' => 'Schedule conflict: Another mezmur training is scheduled at this time'], 422);
             }
 
             DB::transaction(function () use ($assignment, $data) {
                 $assignment->update([
-                    'trainer_id' => $data['trainer_id'],
+                    'trainer_id' => null,
+                    'trainer_name' => $data['trainer_name'] ?? null,
+                    'is_night' => isset($data['is_night']) ? filter_var($data['is_night'], FILTER_VALIDATE_BOOLEAN) : $assignment->is_night,
                     'location' => $data['location'] ?? $assignment->location,
                     'day_of_week' => $data['day_of_week'] ?? null,
                     'scheduled_date' => $data['scheduled_date'] ?? null,
@@ -490,18 +608,19 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if (($assignment->type === 'Course' && !$user->hasRole('tmhrt_office_admin')) ||
-            ($assignment->type === 'MezmurTraining' && !$user->hasRole('mezmur_office_admin'))
-        ) {
+        if ($assignment->type === 'Course' && !($user->hasRole('tmhrt_kfl') || $user->hasRole('super_admin'))) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ($assignment->type === 'MezmurTraining' && !($user->hasRole('mezmur_kfl') || $user->hasRole('super_admin'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $assignment->delete();
 
-        return response()->json(['message' => 'Assignment deleted successfully']);
+        return response()->json(null, 204);
     }
 
-    public function schedule(Request $request)
+    public function getSchedule(Request $request)
     {
         $user = Auth::user();
 
@@ -527,12 +646,58 @@ class AssignmentController extends Controller
             'assignmentCourses.teacher'
         ])->where('active', true);
 
+        if ($user->hasRole('teacher')) {
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereHas('assignmentCourses', fn ($ac) =>
+                      $ac->where('teacher_id', $user->id)
+                  );
+            });
+        } elseif ($user->hasRole('tmhrt_kfl')) {
+            $query->where('type', 'Course');
+        } elseif ($user->hasRole('mezmur_kfl')) {
+            $query->where('type', 'MezmurTraining');
+        }
+
         if ($dayOfWeek !== null) {
             $query->where('day_of_week', $dayOfWeek);
+        }
+
+        if ($request->has('is_night') && $request->input('is_night') !== '' && $request->input('is_night') !== 'all') {
+            $query->where('is_night', filter_var($request->input('is_night'), FILTER_VALIDATE_BOOLEAN));
         }
 
         $schedule = $query->orderBy('day_of_week')->orderBy('start_time')->get();
 
         return response()->json($schedule);
+    }
+
+    public function schedule(Request $request)
+    {
+        return $this->getSchedule($request);
+    }
+
+    /**
+     * 🏁 Archive/End current semester: Deactivates all currently active assignments.
+     */
+    public function endSemester(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user || !($user->hasRole('super_admin') || $user->hasRole('tmhrt_kfl'))) {
+            return response()->json(['message' => 'Unauthorized: Only Super Admin or Tmhrt Kfl can end the semester.'], 403);
+        }
+
+        $type = $request->input('type');
+        $query = Assignment::where('active', true);
+        if ($type) {
+            $query->where('type', $type);
+        }
+
+        $count = $query->update(['active' => false]);
+
+        return response()->json([
+            'message' => "Semester ended successfully. {$count} class assignment(s) have been archived.",
+            'archived_count' => $count,
+        ]);
     }
 }

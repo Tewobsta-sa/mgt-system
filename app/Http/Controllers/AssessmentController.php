@@ -15,10 +15,16 @@ class AssessmentController extends Controller
     {
         $query = Assessment::with('course');
 
+        if ($request->filled('course_id')) {
+            $query->where('course_id', $request->query('course_id'));
+        } 
+
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where('title', 'like', "%{$s}%")
+            $query->where(function($q) use ($s) {
+                $q->where('title', 'like', "%{$s}%")
                   ->orWhereHas('course', fn($q) => $q->where('name', 'like', "%{$s}%"));
+            });
         }
 
         $perPage = (int) $request->input('per_page', 15);

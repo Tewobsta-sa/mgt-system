@@ -1,67 +1,115 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Sunday School & Church Management System (API)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Production-grade RESTful API backend for Orthodox Sunday School management, built with Laravel 12, PHP 8.2+, and Laravel Sanctum.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## 🏛️ System Architecture & Overview
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+The system powers student enrollment, multi-department academic tracking, night/day shift scheduling, QR-based live attendance, grading, and a 3-tier student promotion pipeline.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### The 5 Canonical Roles
+Access control is enforced strictly across 5 canonical roles:
 
-## Learning Laravel
+| Role Name | Identifier (`name`) | Department / Responsibility |
+| :--- | :--- | :--- |
+| **Super Admin** | `super_admin` | Full system administration, user management, and final promotion approval |
+| **Ye Sew Habt Kfl** | `yesew_habt` | Human resources, student demographic management, Level 2 promotion endorsement |
+| **Tmhrt Kfl** | `tmhrt_kfl` | Academic courses, teachers, sections, curriculum, Level 1 promotion nomination |
+| **Mezmur Kfl** | `mezmur_kfl` | Hymn repertoire, student vocal tracks, hymn assessments & attendance |
+| **Mereja Kfl** | `mereja_kfl` | Read-only statistics, dashboards, records oversight, and report generation |
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+---
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+## 🚀 Key Modules & Capabilities
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+1. **Shift-Aware Attendance System**:
+   - Supports Day and Night schedules (including overnight sessions that run past midnight).
+   - Automatic lateness calculation against shift start times.
+   - Shift-matching verification preventing day students from erroneously being marked in night sessions.
+   - High-throughput QR scanner endpoints (`/api/attendance/scan-and-mark`).
 
-## Laravel Sponsors
+2. **3-Tier Student Promotion Pipeline**:
+   - **Level 1 (Tmhrt Kfl)**: Evaluates academic threshold (≥ 50%) and attendance threshold (≥ 70%), nominates candidates.
+   - **Level 2 (Ye Sew Habt Kfl)**: Reviews nominated candidate rosters and endorses for advancement.
+   - **Level 3 (Super Admin)**: Executes official promotion, advancing students into their target sections or graduating them.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+3. **Mezmur & Hymn Ministry**:
+   - Tracks hymns by category, tier, and liturgical season.
+   - Mezmur student tracking (`is_mezmur`) and hymn examination records.
 
-### Premium Partners
+4. **Streaming & O(1) Memory Exports**:
+   - CSV reports (`/api/reports/export/{type}`) stream directly to the client using Eloquent `cursor()` and include UTF-8 BOM headers for seamless display of Ethiopian/Amharic script in Microsoft Excel.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+5. **Token Security & Rate Limiting**:
+   - Short-lived Bearer access tokens paired with rotatable refresh tokens (`/api/refresh`).
+   - Rate limiting on sensitive endpoints (`/api/login`, `/api/forgot-password`).
+   - Realpath containment protecting media downloads against path traversal attacks.
 
-## Contributing
+---
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## ⚙️ Installation & Setup
 
-## Code of Conduct
+### Requirements
+- **PHP**: 8.2 or higher (with `pdo`, `mbstring`, `openssl`, `fileinfo`, `sqlite3` or `mysql` extensions)
+- **Composer**: 2.5 or higher
+- **Database**: SQLite (default) or MySQL 8.0+
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+### Setup Instructions
 
-## Security Vulnerabilities
+1. **Install Dependencies**:
+   ```bash
+   composer install --optimize-autoloader --no-dev
+   ```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+2. **Environment Configuration**:
+   ```bash
+   cp .env.example .env
+   php artisan key:generate
+   ```
 
-## License
+3. **Configure Database & CORS in `.env`**:
+   ```env
+   APP_ENV=production
+   APP_DEBUG=false
+   APP_URL=https://api.yourchurchdomain.org
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+   FRONTEND_URL=https://app.yourchurchdomain.org
+   ALLOWED_ORIGINS=https://app.yourchurchdomain.org,http://localhost:5173
 
-read the whole project concept from my notebook
-try to remember each packages i used nd try to understand how each works....check pkg.json file
-try to see ai concepts that were included in the ai courses nd also there working principle
-check heap nd other related dsa concepts
-how to make url hidden and also how to make secure our system
+   DB_CONNECTION=sqlite
+   # Or for MySQL:
+   # DB_CONNECTION=mysql
+   # DB_HOST=127.0.0.1
+   # DB_PORT=3306
+   # DB_DATABASE=church_mgt
+   # DB_USERNAME=church_user
+   # DB_PASSWORD=secret_password
+   ```
+
+4. **Run Migrations**:
+   ```bash
+   php artisan migrate --force
+   ```
+
+5. **Storage Symlink**:
+   ```bash
+   php artisan storage:link
+   ```
+
+6. **System Initialization**:
+   - Navigate to `/api/system/status` or visit the frontend setup wizard at `/setup`.
+   - The initial Super Admin account is provisioned once through `/api/system/initialize`.
+
+---
+
+## 🔒 Security Best Practices for Production
+
+- **Credentials & Passwords**: Passwords and security answers are hashed (`bcrypt`) and hidden from serialization (`$hidden = ['password', 'remember_token', 'security_answer']`).
+- **File Uploads**: Certificate and photo uploads strictly enforce MIME restrictions (`jpg,jpeg,png,pdf`) and maximum file size limits (5 MB).
+- **CORS Protection**: Origin checks are dynamically loaded from `FRONTEND_URL` and `ALLOWED_ORIGINS`.
+
+---
+
+## 📜 License
+Private & Proprietary. All rights reserved by the Sunday School Administration.
