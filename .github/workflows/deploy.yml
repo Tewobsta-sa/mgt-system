@@ -24,8 +24,13 @@ jobs:
 
       # Build vendor/ in CI and upload it — most cPanel shared hosts have
       # no Composer/SSH, so the server can't run `composer install`.
+      # composer.json requires a patched PHP (CVE-2026-109618/109619), and the
+      # generated vendor/composer/platform_check.php refuses to boot on older PHP.
       - name: Install production dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Fail on known vulnerable dependencies
+        run: composer audit --no-dev --locked
 
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.3
@@ -48,7 +53,6 @@ jobs:
             storage/framework/cache/data/**
             storage/framework/sessions/**
             storage/framework/views/**
-            vendor/**
             *.log
 
 # ────────────────────────────────────────────────────────────────────────────

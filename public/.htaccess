@@ -1,3 +1,12 @@
+# Mitigation for CVE-2026-109619 when PHP runs as an Apache module
+# (FPM/CGI hosts use public/.user.ini instead). Upgrading PHP is still required.
+<IfModule mod_php.c>
+    php_flag session.upload_progress.enabled off
+</IfModule>
+<IfModule mod_php8.c>
+    php_flag session.upload_progress.enabled off
+</IfModule>
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
