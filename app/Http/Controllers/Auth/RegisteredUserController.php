@@ -191,9 +191,12 @@ class RegisteredUserController extends Controller
     {
         $user = User::findOrFail(Auth::id());
 
+        if ($request->filled('username') && $request->username !== $user->username) {
+            return response()->json(['error' => 'Username cannot be changed'], 422);
+        }
+
         $request->validate([
             'name' => 'sometimes|string|max:255',
-            'username' => 'sometimes|string|unique:users,username,' . $user->id,
             'password' => 'nullable|string|min:8|confirmed',
             'current_password' => 'required_with:password',
             'security_question' => 'nullable|string|max:255',
@@ -209,7 +212,7 @@ class RegisteredUserController extends Controller
             $user->password = Hash::make($request->password);
         }
 
-        $user->fill($request->only(['name', 'username', 'security_question']));
+        $user->fill($request->only(['name', 'security_question']));
 
         if ($request->filled('security_answer')) {
             $user->security_answer = Hash::make($request->security_answer);
@@ -247,9 +250,12 @@ class RegisteredUserController extends Controller
             return response()->json(['error' => 'You are not allowed to update this role'], 403);
         }
 
+        if ($request->filled('username') && $request->username !== $user->username) {
+            return response()->json(['error' => 'Username cannot be changed'], 422);
+        }
+
         $request->validate([
             'name' => 'sometimes|string|max:255',
-            'username' => 'sometimes|string|unique:users,username,' . $user->id,
             'password' => 'nullable|string|min:8|confirmed',
             'security_question' => 'nullable|string|max:255',
             'security_answer' => 'nullable|string|max:255',
@@ -257,7 +263,7 @@ class RegisteredUserController extends Controller
             'program_type_ids.*' => 'exists:program_types,id',
         ]);
 
-        $user->fill($request->only(['name', 'username', 'security_question']));
+        $user->fill($request->only(['name', 'security_question']));
 
         if ($request->filled('password')) {
             $user->password = Hash::make($request->password);

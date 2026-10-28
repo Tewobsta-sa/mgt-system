@@ -266,7 +266,7 @@ class StudentPromotionController extends Controller
             'sections' => $allSections,
             'thresholds' => [
                 'min_grade' => (float) config('academic.promotion_min_grade', 50.0),
-                'min_attendance' => (float) config('academic.promotion_min_attendance', 60.0),
+                'min_attendance' => (float) config('academic.promotion_min_attendance', 70.0),
             ],
             'user_role' => [
                 'is_super_admin' => $user->hasRole('super_admin'),

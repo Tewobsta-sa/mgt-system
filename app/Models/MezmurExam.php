@@ -8,6 +8,7 @@ class MezmurExam extends Model
 {
     protected $fillable = [
         'ministry_id',
+        'target_classification',
         'title',
         'exam_date',
         'description',

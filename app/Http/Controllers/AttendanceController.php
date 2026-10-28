@@ -193,7 +193,7 @@ class AttendanceController extends Controller
         }
 
         $validated = $request->validate([
-            'assignment_id' => 'required|exists:assignments,id',
+            'assignment_id' => 'nullable|exists:assignments,id',
             'qr_data' => 'required',
             'status' => 'nullable|in:Present,Absent,Excused,Late',
         ]);
@@ -230,8 +230,22 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Student record not found.'], 404);
         }
 
-        // 2. Load Assignment and check permissions
-        $assignment = Assignment::with(['section', 'assignmentCourses.course', 'mezmurs'])->findOrFail($validated['assignment_id']);
+        // 2. Load Assignment — explicit pick, or auto-resolve today's session
+        //    for this student when no assignment was selected.
+        if (!empty($validated['assignment_id'])) {
+            $assignment = Assignment::with(['section', 'assignmentCourses.course', 'mezmurs'])
+                ->findOrFail($validated['assignment_id']);
+        } else {
+            $assignment = $this->resolveSessionForStudent($student);
+
+            if (!$assignment) {
+                return response()->json([
+                    'message' => "ዛሬ ለ{$student->name} የሚስማማ ክፍለ-ጊዜ አልተገኘም። እባክዎ ክፍለ-ጊዜውን በእጅ ይምረጡ። (No matching session found for this student today — pick one manually.)"
+                ], 422);
+            }
+
+            $assignment->loadMissing(['section', 'assignmentCourses.course', 'mezmurs']);
+        }
 
         if ($user->hasRole('teacher')) {
             $isOwnAssignment = $assignment->assignmentCourses()
@@ -280,6 +294,15 @@ class AttendanceController extends Controller
         return response()->json([
             'message' => $feedbackMsg,
             'attendance' => $attendance,
+            'assignment' => [
+                'id' => $assignment->id,
+                'type' => $assignment->type,
+                'title' => $assignment->type === 'Course'
+                    ? ($assignment->assignmentCourses->first()?->course?->name ?? 'Course')
+                    : ($assignment->mezmurs->first()?->title ?? 'Mezmur Training'),
+                'section_name' => $assignment->section?->name ?? null,
+                'start_time' => $assignment->start_time,
+            ],
             'student' => [
                 'id' => $student->id,
                 'student_id' => $student->student_id,
@@ -292,6 +315,52 @@ class AttendanceController extends Controller
                 'marked_at' => now()->format('H:i:s'),
             ],
         ], 200);
+    }
+
+    /**
+     * Auto-resolve which session a scanned student belongs to *right now*.
+     * Candidates: today's (recurring day_of_week or scheduled_date) active
+     * assignments matching the student's shift and own section (Course) —
+     * or any MezmurTraining session when the student is a mezmur member.
+     * On multiple matches, the session whose start time is nearest wins.
+     */
+    private function resolveSessionForStudent(Student $student): ?Assignment
+    {
+        $now = now();
+        $dow = (int) $now->dayOfWeek; // 0=Sun..6=Sat
+        $today = $now->toDateString();
+
+        $candidates = Assignment::where('active', true)
+            ->where('is_night', (bool) $student->is_night)
+            ->where(function ($q) use ($dow, $today) {
+                $q->where('day_of_week', $dow)->orWhere('scheduled_date', $today);
+            })
+            ->where(function ($q) use ($student) {
+                $q->where(function ($c) use ($student) {
+                    $c->where('type', 'Course')
+                        ->where('section_id', $student->section_id);
+                });
+                if ($student->is_mezmur) {
+                    $q->orWhere('type', 'MezmurTraining');
+                }
+            })
+            ->get();
+
+        if ($candidates->isEmpty()) {
+            return null;
+        }
+
+        if ($candidates->count() === 1) {
+            return $candidates->first();
+        }
+
+        $nowMinutes = ((int) $now->format('H')) * 60 + (int) $now->format('i');
+
+        return $candidates
+            ->sortBy(fn ($a) => $a->start_time
+                ? abs(((int) substr($a->start_time, 0, 2)) * 60 + (int) substr($a->start_time, 3, 2) - $nowMinutes)
+                : PHP_INT_MAX)
+            ->first();
     }
 
     /**

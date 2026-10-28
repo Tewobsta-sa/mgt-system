@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Assignment;
 use App\Models\Student;
+use App\Support\EthiopianDate;
 
 /**
  * Shared promotion-eligibility evaluation.
@@ -16,7 +17,7 @@ class PromotionEvaluator
     {
         return [
             'min_grade' => (float) config('academic.promotion_min_grade', 50.0),
-            'min_attendance' => (float) config('academic.promotion_min_attendance', 60.0),
+            'min_attendance' => (float) config('academic.promotion_min_attendance', 70.0),
         ];
     }
 
@@ -117,12 +118,20 @@ class PromotionEvaluator
             ? round(array_sum($overallPercentages) / count($overallPercentages), 1)
             : null;
 
-        // Attendance performance
+        // Attendance performance — scoped to the current Ethiopian academic
+        // year (Meskerem 1 -> Pagume), evaluated from session_date.
+        $yearStart = EthiopianDate::academicYearStart();
         $courseSessions = ['total' => 0, 'present' => 0, 'absent' => 0, 'excused' => 0];
         $mezmurSessions = ['total' => 0, 'present' => 0, 'absent' => 0, 'excused' => 0];
         $sessionLogs = [];
 
         foreach ($student->attendances as $att) {
+            $attDate = $att->session_date
+                ?? ($att->marked_at ? date('Y-m-d', strtotime($att->marked_at)) : null);
+            if (!$attDate || $attDate < $yearStart) {
+                continue;
+            }
+
             $type = $att->assignment?->type ?? 'Course';
             $status = $att->status;
 
@@ -180,6 +189,40 @@ class PromotionEvaluator
             ],
             'session_logs' => array_slice(array_reverse($sessionLogs), 0, 10),
         ];
+    }
+
+    /**
+     * Mezmur-only attendance percentage for one student over the current
+     * academic year (or since $since when provided). Present and Late count
+     * fully; Excused counts half. Null when no mezmur sessions were recorded.
+     */
+    public static function mezmurAttendancePercent(Student $student, ?string $since = null): ?float
+    {
+        $since = $since ?: EthiopianDate::academicYearStart();
+
+        $total = 0;
+        $score = 0.0;
+
+        foreach ($student->attendances as $att) {
+            if (($att->assignment?->type ?? 'Course') !== 'MezmurTraining') {
+                continue;
+            }
+
+            $attDate = $att->session_date
+                ?? ($att->marked_at ? date('Y-m-d', strtotime($att->marked_at)) : null);
+            if (!$attDate || $attDate < $since) {
+                continue;
+            }
+
+            $total++;
+            if (in_array($att->status, ['Present', 'Late'], true)) {
+                $score += 1;
+            } elseif ($att->status === 'Excused') {
+                $score += 0.5;
+            }
+        }
+
+        return $total > 0 ? round(($score / $total) * 100, 1) : null;
     }
 
     /**

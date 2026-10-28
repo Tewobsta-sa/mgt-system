@@ -9,5 +9,11 @@ return [
     | student to be considered eligible for promotion.
     */
     'promotion_min_grade' => (float) env('PROMOTION_MIN_GRADE', 50.0),
-    'promotion_min_attendance' => (float) env('PROMOTION_MIN_ATTENDANCE', 60.0),
+    'promotion_min_attendance' => (float) env('PROMOTION_MIN_ATTENDANCE', 70.0),
+
+    /*
+    | Minimum MezmurTraining attendance percentage for a student to be
+    | considered eligible for ministry assignment review.
+    */
+    'mezmur_min_attendance' => (float) env('MEZMUR_MIN_ATTENDANCE', 70.0),
 ];

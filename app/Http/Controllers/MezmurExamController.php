@@ -45,6 +45,7 @@ class MezmurExamController extends Controller
     {
         $validated = $request->validate([
             'ministry_id' => 'nullable|exists:ministries,id',
+            'target_classification' => 'nullable|string|in:prekg,htsanat,maekelawyan,wetatoch,distance',
             'title' => 'required|string|max:255',
             'exam_date' => 'required|date',
             'description' => 'nullable|string',
@@ -52,6 +53,7 @@ class MezmurExamController extends Controller
 
         $exam = MezmurExam::create([
             'ministry_id' => $validated['ministry_id'] ?? null,
+            'target_classification' => $validated['target_classification'] ?? null,
             'title' => $validated['title'],
             'exam_date' => $validated['exam_date'],
             'description' => $validated['description'] ?? null,
@@ -80,6 +82,15 @@ class MezmurExamController extends Controller
             ->with('section')
             ->whereIn('status', ['regular', 'Active'])
             ->whereNotIn('status', ['new', 'Inactive', 'Graduated']);
+
+        // Target group: explicit param, or resolved from the exam itself.
+        $target = $request->input('target_classification');
+        if (!$target && $request->filled('exam_id')) {
+            $target = MezmurExam::whereKey($request->input('exam_id'))->value('target_classification');
+        }
+        if ($target && $target !== 'all') {
+            $query->where('classification', $target);
+        }
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -217,6 +228,62 @@ class MezmurExamController extends Controller
 
         $results = $query->orderBy('sent_at', 'desc')->paginate(20);
 
-        return response()->json($results);
+        $since = \App\Support\EthiopianDate::academicYearStart();
+        $minAttendance = (float) config('academic.mezmur_min_attendance', 70.0);
+
+        // Attach this-year mezmur attendance % to each passed row.
+        $studentsById = Student::with('attendances.assignment')
+            ->whereIn('id', $results->getCollection()->pluck('student_id')->filter())
+            ->get()
+            ->keyBy('id');
+
+        $results->getCollection()->transform(function ($r) use ($studentsById, $minAttendance, $since) {
+            $pct = ($st = $studentsById->get($r->student_id))
+                ? \App\Services\PromotionEvaluator::mezmurAttendancePercent($st, $since)
+                : null;
+            $r->mezmur_attendance_pct = $pct;
+            $r->attendance_eligible = $pct !== null && $pct >= $minAttendance;
+            return $r;
+        });
+
+        // View-only list: regular students eligible purely by mezmur
+        // attendance (>= threshold this academic year) who have neither been
+        // sent as passed nor already assigned to a ministry.
+        $sentPassedIds = MezmurExamResult::where('status', 'passed')
+            ->where('sent_to_yesew_habt', true)
+            ->pluck('student_id');
+        $assignedIds = \App\Models\MinistryAssignmentStudent::pluck('student_id');
+
+        $eligibleStudents = Student::notFlagged()
+            ->with(['section', 'attendances.assignment'])
+            ->where('status', 'regular')
+            ->whereNotIn('id', $sentPassedIds)
+            ->whereNotIn('id', $assignedIds)
+            ->orderBy('name')
+            ->get()
+            ->map(function ($s) use ($since, $minAttendance) {
+                $pct = \App\Services\PromotionEvaluator::mezmurAttendancePercent($s, $since);
+                if ($pct === null || $pct < $minAttendance) {
+                    return null;
+                }
+                return [
+                    'id' => $s->id,
+                    'student_id' => $s->student_id,
+                    'name' => $s->name,
+                    'christian_name' => $s->christian_name,
+                    'section_name' => $s->section?->name,
+                    'classification' => $s->classification,
+                    'mezmur_attendance_pct' => $pct,
+                ];
+            })
+            ->filter()
+            ->values();
+
+        $payload = $results->toArray();
+        $payload['eligible_students'] = $eligibleStudents;
+        $payload['mezmur_min_attendance'] = $minAttendance;
+        $payload['academic_year_start'] = $since;
+
+        return response()->json($payload);
     }
 }
