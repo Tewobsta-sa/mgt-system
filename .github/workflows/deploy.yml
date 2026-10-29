@@ -19,7 +19,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: "8.3"
           extensions: mbstring, xml, ctype, json, bcmath, fileinfo, openssl, pdo_mysql, tokenizer, gd
 
       # Build vendor/ in CI and upload it — most cPanel shared hosts have
@@ -38,7 +38,7 @@ jobs:
           server: ${{ secrets.FTP_HOST }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftp
+          protocol: ftps
           port: 21
           timeout: 120000
           server-dir: ${{ secrets.FTP_PATH }} # must end with '/'
