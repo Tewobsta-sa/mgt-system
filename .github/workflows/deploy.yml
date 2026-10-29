@@ -32,6 +32,18 @@ jobs:
       - name: Fail on known vulnerable dependencies
         run: composer audit --no-dev --locked
 
+      - name: Connectivity probe (diagnose FTP timeout)
+        run: |
+          HOST="${{ secrets.FTP_HOST }}"
+          echo "Runner public IP: $(curl -s ifconfig.me)"
+          for p in 21 443 2083; do
+            timeout 10 bash -c "</dev/tcp/$HOST/$p" \
+              && echo "port $p OPEN" \
+              || echo "port $p BLOCKED"
+          done
+          curl -sk -o /dev/null -w "https on 2083 -> HTTP %{http_code}\n" \
+            --connect-timeout 10 "https://$HOST:2083/" || true
+
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.3
         with:
