@@ -58,10 +58,11 @@ jobs:
         run: |
           set -euo pipefail
           AUTH="Authorization: cpanel $CPANEL_USER:$CPANEL_TOKEN"
-          REL="${DEPLOY_DIR#/home/*/}"; REL="${REL%/}"
+          REL="${DEPLOY_DIR#/home/*/}"
+          REL="${REL#/}"; REL="${REL%/}"
           echo "Deploying to $DEPLOY_DIR (relative: $REL)"
 
-          tar -czf deploy.tar.gz \
+          tar -czf /tmp/deploy.tar.gz \
             --exclude='./.git' --exclude='./.github' \
             --exclude='./node_modules' --exclude='./tests' \
             --exclude='./.env' --exclude='./.env.*' \
@@ -73,8 +74,8 @@ jobs:
 
           echo "== upload tarball =="
           curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/execute/Fileman/upload_files?dir=$DEPLOY_DIR&overwrite=1" \
-            -F "file-0=@deploy.tar.gz;filename=deploy.tar.gz"
+            "https://$CPANEL_HOST:2083/execute/Fileman/upload_files?dir=$REL&overwrite=1" \
+            -F "file-0=@/tmp/deploy.tar.gz;filename=deploy.tar.gz"
           echo
 
           echo "== extract on server =="
