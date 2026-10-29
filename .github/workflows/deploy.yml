@@ -46,9 +46,18 @@ jobs:
         run: |
           set -euo pipefail
           AUTH="Authorization: cpanel $CPANEL_USER:$CPANEL_TOKEN"
+          HOST="$(echo "$CPANEL_HOST" | tr -d '[:space:]')"
+          HOST="${HOST#*://}"; HOST="${HOST%%/*}"; HOST="${HOST%%:*}"
           REL="${DEPLOY_DIR#/home/*/}"
           REL="${REL#/}"; REL="${REL%/}"
-          echo "Deploying to $DEPLOY_DIR (relative: $REL)"
+          echo "Deploying to $DEPLOY_DIR (relative: $REL) on $HOST"
+
+          # cPanel API2 fileop — this host's UAPI has no Fileman::fileop.
+          fileop() {
+            curl -sfS -H "$AUTH" \
+              "https://$HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&cpanel_jsonapi_apiversion=2&$1&doubledecode=0"
+          }
+          check() { echo "$1"; echo "$1" | grep -Eq '"status":1|"error":null' || { echo "API call FAILED"; exit 1; }; }
 
           tar -czf /tmp/deploy.tar.gz \
             --exclude='./.git' --exclude='./.github' \
@@ -61,24 +70,20 @@ jobs:
             --exclude='*.log' .
 
           echo "== upload tarball =="
-          curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/execute/Fileman/upload_files?dir=$REL&overwrite=1" \
-            -F "file-0=@/tmp/deploy.tar.gz;filename=deploy.tar.gz"
-          echo
+          resp=$(curl -sfS -H "$AUTH" \
+            "https://$HOST:2083/execute/Fileman/upload_files?dir=$REL&overwrite=1" \
+            -F "file-0=@/tmp/deploy.tar.gz;filename=deploy.tar.gz")
+          check "$resp"
 
           echo "== extract on server =="
-          curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/execute/Fileman/fileop?op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL" \
-          || curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL&doubledecode=0"
-          echo
+          resp=$(fileop "op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL")
+          check "$resp"
 
           echo "== remove tarball =="
-          curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/execute/Fileman/fileop?op=trash&sourcefiles=$REL%2Fdeploy.tar.gz" \
-          || curl -sfS -H "$AUTH" \
-            "https://$CPANEL_HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&op=trash&sourcefiles=$REL%2Fdeploy.tar.gz&doubledecode=0" \
-          || echo "cleanup failed (harmless leftover deploy.tar.gz)"
+          resp=$(fileop "op=trash&sourcefiles=$REL%2Fdeploy.tar.gz") || true
+          echo "$resp"
+          echo "$resp" | grep -Eq '"status":1|"error":null' \
+            || echo "cleanup failed (leftover deploy.tar.gz — remove via File Manager)"
 
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
