@@ -52,12 +52,11 @@ jobs:
           REL="${REL#/}"; REL="${REL%/}"
           echo "Deploying to $DEPLOY_DIR (relative: $REL) on $HOST"
 
-          # cPanel API2 fileop — this host's UAPI has no Fileman::fileop.
-          fileop() {
-            curl -sfS -H "$AUTH" \
-              "https://$HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&cpanel_jsonapi_apiversion=2&$1&doubledecode=0"
-          }
-          check() { echo "$1"; echo "$1" | grep -Eq '"status":1|"error":null' || { echo "API call FAILED"; exit 1; }; }
+          # Note: Fileman::fileop extract does NOT overwrite existing files,
+          # and 443 is blocked from runners — so extraction runs via a
+          # one-shot cron job added through the UAPI (tar overwrites, and
+          # preserves .env/storage which are excluded from the archive).
+          check() { echo "$1"; echo "$1" | grep -q '"status":1' || { echo "API call FAILED"; exit 1; }; }
 
           tar -czf /tmp/deploy.tar.gz \
             --exclude='./.git' --exclude='./.github' \
@@ -75,15 +74,37 @@ jobs:
             -F "file-0=@/tmp/deploy.tar.gz;filename=deploy.tar.gz")
           check "$resp"
 
-          echo "== extract on server =="
-          resp=$(fileop "op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL")
+          echo "== schedule extract via cron =="
+          resp=$(curl -sfS -G -H "$AUTH" "https://$HOST:2083/execute/Cron/add_line" \
+            --data-urlencode "command=cd ~/$REL && tar xzf deploy.tar.gz && rm -f deploy.tar.gz" \
+            --data-urlencode "minute=*" --data-urlencode "hour=*" \
+            --data-urlencode "day=*" --data-urlencode "month=*" \
+            --data-urlencode "weekday=*")
           check "$resp"
 
-          echo "== remove tarball =="
-          resp=$(fileop "op=trash&sourcefiles=$REL%2Fdeploy.tar.gz") || true
-          echo "$resp"
-          echo "$resp" | grep -Eq '"status":1|"error":null' \
-            || echo "cleanup failed (leftover deploy.tar.gz — remove via File Manager)"
+          echo "== wait for cron to extract (up to ~2 min) =="
+          for i in 1 2; do
+            sleep 75
+            files=$(curl -sfS -H "$AUTH" \
+              "https://$HOST:2083/execute/Fileman/list_files?dir=$REL&types=file")
+            echo "$files" | grep -q deploy.tar.gz || break
+          done
+          echo "$files" | grep -q deploy.tar.gz \
+            && { echo "tarball still present — extract did not run"; exit 1; }
+          echo "extract done (tarball removed by cron)"
+
+          echo "== remove cron line =="
+          list=$(curl -sfS -H "$AUTH" "https://$HOST:2083/execute/Cron/list_cron")
+          LN=$(echo "$list" | jq -r '.data | .. | objects
+                | select(.command? and (.command | contains("deploy.tar.gz")))
+                | .line_number' | head -1)
+          if [ -n "$LN" ]; then
+            resp=$(curl -sfS -H "$AUTH" \
+              "https://$HOST:2083/execute/Cron/remove_line?line_number=$LN")
+            echo "$resp"
+          else
+            echo "cron line not found — check cPanel > Cron Jobs manually"
+          fi
 
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
