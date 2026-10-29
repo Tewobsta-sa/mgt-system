@@ -44,28 +44,52 @@ jobs:
           curl -sk -o /dev/null -w "https on 2083 -> HTTP %{http_code}\n" \
             --connect-timeout 10 "https://$HOST:2083/" || true
 
-      - name: Deploy via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.3
-        with:
-          server: ${{ secrets.FTP_HOST }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftp
-          port: 21
-          timeout: 120000
-          server-dir: ${{ secrets.FTP_PATH }} # must end with '/'
-          exclude: |
-            **/.git*
-            **/.github/**
-            node_modules/**
-            tests/**
-            .env
-            .env.*
-            storage/logs/*.log
-            storage/framework/cache/data/**
-            storage/framework/sessions/**
-            storage/framework/views/**
-            *.log
+      # Host firewall blocks FTP (21) and HTTPS (443) from GitHub runners.
+      # Port 2083 (cPanel) is reachable, so we upload a tarball through the
+      # UAPI File Manager and extract it on the server instead.
+      # Required secrets: CPANEL_USERNAME, CPANEL_API_TOKEN
+      # (cPanel > Manage API Tokens). FTP_HOST and FTP_PATH are reused.
+      - name: Deploy via cPanel UAPI (port 2083)
+        env:
+          CPANEL_HOST: ${{ secrets.FTP_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USERNAME }}
+          CPANEL_TOKEN: ${{ secrets.CPANEL_API_TOKEN }}
+          DEPLOY_DIR: ${{ secrets.FTP_PATH }} # e.g. /home/cpaneluser/mgt-system/
+        run: |
+          set -euo pipefail
+          AUTH="Authorization: cpanel $CPANEL_USER:$CPANEL_TOKEN"
+          REL="${DEPLOY_DIR#/home/*/}"; REL="${REL%/}"
+          echo "Deploying to $DEPLOY_DIR (relative: $REL)"
+
+          tar -czf deploy.tar.gz \
+            --exclude='./.git' --exclude='./.github' \
+            --exclude='./node_modules' --exclude='./tests' \
+            --exclude='./.env' --exclude='./.env.*' \
+            --exclude='./storage/logs/*.log' \
+            --exclude='./storage/framework/cache/data' \
+            --exclude='./storage/framework/sessions' \
+            --exclude='./storage/framework/views' \
+            --exclude='*.log' .
+
+          echo "== upload tarball =="
+          curl -sfS -H "$AUTH" \
+            "https://$CPANEL_HOST:2083/execute/Fileman/upload_files?dir=$DEPLOY_DIR&overwrite=1" \
+            -F "file-0=@deploy.tar.gz;filename=deploy.tar.gz"
+          echo
+
+          echo "== extract on server =="
+          curl -sfS -H "$AUTH" \
+            "https://$CPANEL_HOST:2083/execute/Fileman/fileop?op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL" \
+          || curl -sfS -H "$AUTH" \
+            "https://$CPANEL_HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&op=extract&sourcefiles=$REL%2Fdeploy.tar.gz&destfiles=$REL&doubledecode=0"
+          echo
+
+          echo "== remove tarball =="
+          curl -sfS -H "$AUTH" \
+            "https://$CPANEL_HOST:2083/execute/Fileman/fileop?op=trash&sourcefiles=$REL%2Fdeploy.tar.gz" \
+          || curl -sfS -H "$AUTH" \
+            "https://$CPANEL_HOST:2083/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_user=$CPANEL_USER&cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=fileop&op=trash&sourcefiles=$REL%2Fdeploy.tar.gz&doubledecode=0" \
+          || echo "cleanup failed (harmless leftover deploy.tar.gz)"
 
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
