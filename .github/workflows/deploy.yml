@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed to diff against the last deployed commit
 
       # Match the PHP version selected in cPanel > MultiPHP Manager
       - name: Setup PHP
@@ -33,8 +35,14 @@ jobs:
         run: composer audit --no-dev --locked
 
       # Host firewall blocks FTP (21) and HTTPS (443) from GitHub runners.
-      # Port 2083 (cPanel) is reachable, so we upload a tarball through the
-      # UAPI File Manager and extract it on the server instead.
+      # Port 2083 (cPanel) is reachable, so deploys go through the UAPI
+      # File Manager. This host's cPanel has no Cron module and
+      # Fileman::fileop extract does not overwrite, so instead of a tarball
+      # we upload each changed file directly (upload_files supports
+      # overwrite). A .deploy-rev file on the server records the last
+      # deployed commit; only files changed since then are uploaded.
+      # Note: files deleted from the repo are left on the server —
+      # harmless for Laravel (autoload is classmap-based).
       # Required secrets: CPANEL_USERNAME, CPANEL_API_TOKEN
       # (cPanel > Manage API Tokens). FTP_HOST and FTP_PATH are reused.
       - name: Deploy via cPanel UAPI (port 2083)
@@ -52,59 +60,59 @@ jobs:
           REL="${REL#/}"; REL="${REL%/}"
           echo "Deploying to $DEPLOY_DIR (relative: $REL) on $HOST"
 
-          # Note: Fileman::fileop extract does NOT overwrite existing files,
-          # and 443 is blocked from runners — so extraction runs via a
-          # one-shot cron job added through the UAPI (tar overwrites, and
-          # preserves .env/storage which are excluded from the archive).
           check() { echo "$1"; echo "$1" | grep -q '"status":1' || { echo "API call FAILED"; exit 1; }; }
 
-          tar -czf /tmp/deploy.tar.gz \
-            --exclude='./.git' --exclude='./.github' \
-            --exclude='./node_modules' --exclude='./tests' \
-            --exclude='./.env' --exclude='./.env.*' \
-            --exclude='./storage/logs/*.log' \
-            --exclude='./storage/framework/cache/data' \
-            --exclude='./storage/framework/sessions' \
-            --exclude='./storage/framework/views' \
-            --exclude='*.log' .
-
-          echo "== upload tarball =="
+          echo "== read last deployed revision =="
           resp=$(curl -sfS -H "$AUTH" \
-            "https://$HOST:2083/execute/Fileman/upload_files?dir=$REL&overwrite=1" \
-            -F "file-0=@/tmp/deploy.tar.gz;filename=deploy.tar.gz")
-          check "$resp"
+            "https://$HOST:2083/execute/Fileman/get_file_content?dir=$REL&file=.deploy-rev" || true)
+          echo "$resp"
+          OLD=$(echo "$resp" | jq -r '.data.content // empty' | tr -d '[:space:]')
 
-          echo "== schedule extract via cron =="
-          resp=$(curl -sfS -G -H "$AUTH" "https://$HOST:2083/execute/Cron/add_line" \
-            --data-urlencode "command=cd ~/$REL && tar xzf deploy.tar.gz && rm -f deploy.tar.gz" \
-            --data-urlencode "minute=*" --data-urlencode "hour=*" \
-            --data-urlencode "day=*" --data-urlencode "month=*" \
-            --data-urlencode "weekday=*")
-          check "$resp"
-
-          echo "== wait for cron to extract (up to ~2 min) =="
-          for i in 1 2; do
-            sleep 75
-            files=$(curl -sfS -H "$AUTH" \
-              "https://$HOST:2083/execute/Fileman/list_files?dir=$REL&types=file")
-            echo "$files" | grep -q deploy.tar.gz || break
-          done
-          echo "$files" | grep -q deploy.tar.gz \
-            && { echo "tarball still present — extract did not run"; exit 1; }
-          echo "extract done (tarball removed by cron)"
-
-          echo "== remove cron line =="
-          list=$(curl -sfS -H "$AUTH" "https://$HOST:2083/execute/Cron/list_cron")
-          LN=$(echo "$list" | jq -r '.data | .. | objects
-                | select(.command? and (.command | contains("deploy.tar.gz")))
-                | .line_number' | head -1)
-          if [ -n "$LN" ]; then
-            resp=$(curl -sfS -H "$AUTH" \
-              "https://$HOST:2083/execute/Cron/remove_line?line_number=$LN")
-            echo "$resp"
+          if [ -n "$OLD" ] && git cat-file -e "$OLD^{commit}" 2>/dev/null; then
+            echo "last deployed commit: $OLD — uploading files changed since then"
+            git diff --name-only --diff-filter=d "$OLD" HEAD > /tmp/upload.txt
           else
-            echo "cron line not found — check cPanel > Cron Jobs manually"
+            echo "no prior revision found — full upload"
+            git ls-files > /tmp/upload.txt
           fi
+
+          # Same exclusions the tarball had (mostly redundant since only
+          # tracked files are listed, but keeps tests/ and .github/ out).
+          grep -vE '^\.github/|^tests/|^\.env|\.env\.|\.log$' /tmp/upload.txt \
+            > /tmp/files.txt || true
+          echo "$(wc -l < /tmp/files.txt) files to upload"
+
+          # upload_files puts all files into a single `dir`, so batch each
+          # request by target directory (sorting on the "dir<TAB>path" key
+          # keeps files from the same directory contiguous).
+          echo "== upload files (batched by directory) =="
+          outdir=""; i=0; args=()
+          flush() {
+            [ "$i" -eq 0 ] && return 0
+            if [ "$outdir" = "." ]; then dir="$REL"; else dir="$REL/$outdir"; fi
+            resp=$(curl -sfS -H "$AUTH" \
+              "https://$HOST:2083/execute/Fileman/upload_files?dir=$dir&overwrite=1" \
+              "${args[@]}")
+            check "$resp"
+            i=0; args=()
+          }
+          while IFS=$'\t' read -r d f; do
+            [ "$d" != "$outdir" ] && { flush; outdir="$d"; }
+            args+=(-F "file-$i=@$f"); i=$((i+1))
+          done < <(
+            awk -F/ '{ if (NF>1) { d=$0; sub("/[^/]+$","",d) } else d="."
+                       print d "\t" $0 }' /tmp/files.txt | sort
+          )
+          flush
+          echo "upload complete"
+
+          echo "== write .deploy-rev =="
+          resp=$(curl -sfS -G -H "$AUTH" \
+            "https://$HOST:2083/execute/Fileman/save_file_content" \
+            --data-urlencode "dir=$REL" --data-urlencode "file=.deploy-rev" \
+            --data-urlencode "content=$(git rev-parse HEAD)")
+          check "$resp"
+          echo "deployed $(git rev-parse HEAD)"
 
 # ────────────────────────────────────────────────────────────────────────────
 # MANUAL STEPS REQUIRED ON CPANEL (FTP deploys can't run artisan):
